@@ -1,0 +1,680 @@
+---
+title: "02-nitrogen-overtime"
+output: html_document
+date: "2025-10-02"
+editor_options: 
+  chunk_output_type: console
+---
+
+# Nitrate
+## Function 
+```{r}
+no3 <- function(std_file, data_file, intercept = NULL, slope = NULL, label_name = "concentration") {
+
+if (is.character(std_file)) {
+std_data <- read_excel(std_file, col_types = c("numeric","text", "numeric"))
+} else {
+std_data <- std_file
+}
+  
+
+if (is.character(data_file)) {
+no3_data <- read_excel(data_file, col_types = c("text", "text", "numeric"))
+} else {
+no3_data <- data_file
+}
+  
+# Standard curve
+ggplot(std_data, aes(x = Standard, y = od540)) +
+geom_point() +
+stat_cor(label.y = 1.0, r.accuracy = 0.0001) +
+stat_regline_equation(label.y = 0.8) +
+geom_smooth(method = "lm", alpha = 0.15, colour = "darkgrey") +
+labs(x = "Nitrate concentraion (mg/L)", y = "Absorbance (540 nm)") +
+theme_bw()
+  
+#standard curve  
+std1 <- std_data %>% dplyr::filter(as.character(plate) == "1")
+std2 <- std_data %>% dplyr::filter(as.character(plate) == "2")
+  
+# Models
+model1 <- lm(od540 ~ Standard, data = std1)
+model2 <- lm(od540 ~ Standard, data = std2)
+  
+# Samples
+sample1 <- no3_data %>%  dplyr::filter(replicat == "1") %>%
+mutate(concentration = (od540 - coef(model1)[1]) / coef(model1)[2])
+  
+sample2 <- no3_data %>%  dplyr::filter(replicat == "2") %>%
+mutate(concentration = (od540 - coef(model2)[1]) / coef(model2)[2])
+      
+# Blank
+mean_blank <- bind_rows(sample1, sample2) %>%
+filter(sample == "bl") %>%
+pull(concentration) %>%
+mean(na.rm = TRUE)
+
+# Duplicates
+mean_conc <- (sample1$concentration + sample2$concentration) / 2
+# Blank correction
+if (!is.na(mean_blank) && mean_blank > 0) {
+mean_conc <- mean_conc - mean_blank} 
+
+
+result <- sample1[1:length(mean_conc), "sample"]
+result[[label_name]] <- mean_conc
+return(result)} 
+
+```
+
+## Nitrate
+```{r}
+t0_soilno3 <- no3(
+  std_file = "synthetic_soil/Raw_data/std_no3_synthetique-T0.xlsx",
+  data_file = "synthetic_soil/Raw_data/no3_synthetique-T0.xlsx",
+  label_name = "concentrationt0"
+)
+
+t1_soilno3 <- no3(
+  std_file = "synthetic_soil/Raw_data/std_no3_synthetique-T1.xlsx",
+  data_file = "synthetic_soil/Raw_data/no3_synthetique-T1.xlsx",
+  label_name = "concentrationt1"
+)
+
+t2_soilno3 <- no3(
+  std_file = "synthetic_soil/Raw_data/std_no3_synthetique-T2.xlsx",
+  data_file = "synthetic_soil/Raw_data/no3_synthetique-T2.xlsx",
+  label_name = "concentrationt2"
+)
+```
+
+## Data transformation
+```{r}
+#Creating a dataframe without blank
+t0_soilno3 <- t0_soilno3 %>% filter(sample != "bl") 
+
+# mg/mL to mg/g soil conversion
+# KCl extraction: 1 g of soil in 10 mL of KCl
+no3_t0 <- t0_soilno3 %>%
+mutate(across(starts_with("concentrationt0"), ~ .x * 0.01, .names = "{.col}_mg_g")) 
+
+no3_t0 <- no3_t0[, c("sample", "concentrationt0_mg_g")]
+
+#Creating a dataframe without blank
+t1_soilno3 <- t1_soilno3 %>% filter(sample != "bl") 
+
+# mg/mL to mg/g soil conversion
+# KCl extraction: 1 g of soil in 10 mL of KCl
+no3_t1 <- t1_soilno3 %>%
+mutate(across(starts_with("concentrationt1"), ~ .x * 0.01, .names = "{.col}_mg_g")) 
+
+no3_t1 <- no3_t1[, c("sample", "concentrationt1_mg_g")]
+
+#Creating a dataframe without blank
+t2_soilno3 <- t2_soilno3 %>% filter(sample != "bl") 
+
+# mg/mL to mg/g soil conversion
+# KCl extraction: 1 g of soil in 10 mL of KCl
+no3_t2 <- t2_soilno3 %>%
+mutate(across(starts_with("concentrationt2"), ~ .x * 0.01, .names = "{.col}_mg_g")) 
+
+no3_t2 <- no3_t2[, c("sample", "concentrationt2_mg_g")]
+
+no3_tf <- read_excel("synthetic_soil/Results/no3_concentration_synthetic.xlsx", col_types = c("text", "numeric"))
+
+
+no3_total <- no3_t0 %>%
+left_join(no3_t1, by = "sample") %>%
+left_join(no3_t2, by = "sample") %>%
+left_join(no3_tf, by = "sample")
+
+```
+
+```{r}
+
+nitrate_long <- no3_total %>%
+pivot_longer(
+cols = starts_with("concentration"),
+names_to = "time",
+values_to = "concmgg") %>%
+mutate(
+    time = case_when(
+      time == "concentrationt0_mg_g"   ~ "T0",
+      time == "concentrationt1_mg_g"   ~ "T1",
+      time == "concentrationt2_mg_g"   ~ "T2",
+      time == "concentrationsoil_mg_g" ~ "TF",
+      TRUE ~ time))
+
+# Add block column
+nitrate_long$bloc <- sub("([a-z0-9]+)[a-z][0-9]+", "\\1", nitrate_long$sample)
+
+# Add soil column
+nitrate_long$soil <- ifelse(grepl("a", nitrate_long$sample), "agricole", 
+                  ifelse(grepl("f", nitrate_long$sample), "forestier", NA))
+
+# treatment
+nitrate_long$treatment <- as.numeric(sub(".*([0-9])$", "\\1", nitrate_long$sample))
+
+# Add treatment
+treatment_map <- c("10^-8", "10^-6", "10^-4", "10^-2", "10^0", "0")
+nitrate_long$treatment <- treatment_map[nitrate_long$treatment]
+as.factor(nitrate_long$treatment)
+
+nitrate_long$concmgg[nitrate_long$concmgg < 0] <- 0
+
+
+```
+
+# Nitrification rate
+```{r}
+
+nitrif_taux <- nitrate_long %>%
+filter(time %in% c("T0", "T2","TF")) %>%         
+mutate(concmgkg = concmgg * 1000) %>%        # conversion mg/g to mg/kg
+dplyr::select(sample, time, concmgkg, bloc, soil, treatment) %>%
+pivot_wider(names_from = time, values_from = concmgkg) %>%
+mutate(rate_mgkg_day_7day = (T2 - T0) / 7) %>%
+mutate(rate_mgkg_day_14day = (TF - T0) / 14)               
+
+nitrif_taux$rate_mgkg_day_7day[nitrif_taux$rate_mgkg_day_7day < 0] <- 0
+nitrif_taux$rate_mgkg_day_14day[nitrif_taux$rate_mgkg_day_14day < 0] <- 0
+
+nitrif_agri <- nitrif_taux %>%
+filter(soil == "agricole")
+
+nitrif_fo <- nitrif_taux %>%
+filter(soil == "forestier")
+
+outlier<- nitrif_taux %>%
+group_by(bloc) %>%
+identify_outliers("rate_mgkg_day_7day")
+
+
+#Nitrif crop
+model<- lm(sqrt(sqrt(rate_mgkg_day_14day)) ~ treatment, data = nitrif_agri)
+# Shapiro-Wilk
+shapiro_test(residuals(model))
+# p.value=0.698
+bartlett.test(sqrt(sqrt(nitrif_agri$rate_mgkg_day_14day)), nitrif_agri$treatment)
+#p-value 0.1824
+
+#Nitrif Forest
+model<- lm(sqrt(rate_mgkg_day_14day) ~ treatment, data = nitrif_fo)
+# Shapiro-Wilk
+shapiro_test(residuals(model))
+# p.value=0.698
+bartlett.test(sqrt(nitrif_fo$rate_mgkg_day_14day), nitrif_fo$treatment)
+#p-value 0.1824
+
+aovagri <- aov(sqrt(sqrt(rate_mgkg_day_14day)) ~ treatment+bloc, data=nitrif_agri)
+summary(aovagri)
+TukeyHSD(aovagri)
+#            Df Sum Sq Mean Sq F value  Pr(>F)   
+#treatment    5 0.5170 0.10341   3.931 0.01207 * 
+#bloc         4 0.5725 0.14313   5.441 0.00394 **
+#Residuals   20 0.5261 0.02631    
+
+meannitrif<-aggregate(rate_mgkg_day_14day ~ treatment, data = nitrif_agri, mean)
+#  treatment rate_mgkg_day_14day
+#         0          0.09983162
+#     10^-2          0.01869720
+#     10^-4          0.03205698
+#     10^-6          0.03218013
+#     10^-8          0.03812059
+#      10^0          0.04766960
+
+diff4_ctl <- (0.03205698/0.09983162)
+reduct4 <- 1-diff4_ctl
+
+
+diff6_ctl <- (0.03218013/0.09983162)
+reduct6 <- 1-diff6_ctl
+
+
+aovforest <- aov(sqrt(rate_mgkg_day_14day) ~ treatment+bloc , data=nitrif_fo)
+summary(aovforest)
+#            Df Sum Sq Mean Sq F value Pr(>F)
+#treatment    5 0.0598 0.01197   0.341  0.882
+#bloc         4 0.1686 0.04214   1.200  0.342
+#Residuals   20 0.7025 0.03512    
+
+```
+
+# Ammonium
+## Function 
+```{r}
+nh4 <- function(std_file, data_file, intercept = NULL, slope = NULL, label_name = "concentration") {
+
+if (is.character(std_file)) {
+std_data <- read_excel(std_file, col_types = c("numeric", "text","numeric"))
+} else {
+std_data <- std_file}
+    
+if (is.character(data_file)) {
+nh4_data <- read_excel(data_file, col_types = c("text", "text", "numeric"))
+} else {
+nh4_data <- data_file}
+  
+#  Remove the 20 mg/L from the standard curve
+std_data <- std_data[std_data$Standard != 20, ]
+
+#standard curve  
+std1 <- std_data %>% dplyr::filter(as.character(plate) == "1")
+std2 <- std_data %>% dplyr::filter(as.character(plate) == "2")
+  
+# Models
+model1 <- lm(od660 ~ Standard, data = std1)
+model2 <- lm(od660 ~ Standard, data = std2)
+  
+# Sample
+sample1 <- nh4_data %>%  dplyr::filter(replicat == "1") %>%
+mutate(concentration = (od660 - coef(model1)[1]) / coef(model1)[2])
+  
+sample2 <- nh4_data %>%  dplyr::filter(replicat == "2") %>%
+mutate(concentration = (od660 - coef(model2)[1]) / coef(model2)[2])
+      
+# Mean blank
+mean_blank <- bind_rows(sample1, sample2) %>%
+  filter(sample == "bl") %>%
+  pull(concentration) %>%
+  mean(na.rm = TRUE)
+
+# Duplicates
+mean_conc <- (sample1$concentration + sample2$concentration) / 2
+#  Blank Correction 
+if (!is.na(mean_blank) && mean_blank > 0) {
+    mean_conc <- mean_conc - mean_blank} 
+
+  result <- sample1[1:length(mean_conc), "sample"]
+  result[[label_name]] <- mean_conc
+  return(result)}
+```
+
+## Temps final Ammonium
+```{r}
+
+t0nh4_soil <- nh4(
+  std_file = "synthetic_soil/Raw_data/std_nh4_synthetique_T0.xlsx",
+  data_file = "synthetic_soil/Raw_data/nh4_synthetique-T0.xlsx",
+  label_name = "concentrationT0")
+
+t1nh4_soil <- nh4(
+  std_file = "synthetic_soil/Raw_data/std_nh4_synthetique_T1.xlsx",
+  data_file = "synthetic_soil/Raw_data/nh4_synthetique-T1.xlsx",
+  label_name = "concentrationT1")
+
+t2nh4_soil <- nh4(
+  std_file = "synthetic_soil/Raw_data/std_nh4_synthetique_T2.xlsx",
+  data_file = "synthetic_soil/Raw_data/nh4_synthetique-T2.xlsx",
+  label_name = "concentrationT2")
+
+```
+
+
+## Data transformation
+```{r}
+#Creating a dataframe without blank
+t0nh4_soil <- t0nh4_soil %>% filter(sample != "bl") 
+
+# mg/mL to mg/g soil conversion
+# KCl extraction: 1 g of soil in 10 mL of KCl
+nh4_t0 <- t0nh4_soil %>%
+mutate(across(starts_with("concentrationt0"), ~ .x * 0.01, .names = "{.col}_mg_g")) 
+
+nh4_t0 <- nh4_t0[, c("sample", "concentrationT0_mg_g")]
+
+#Creating a dataframe without blank
+t1nh4_soil <- t1nh4_soil %>% filter(sample != "bl") 
+
+# mg/mL to mg/g soil conversion
+# KCl extraction: 1 g of soil in 10 mL of KCl
+nh4_t1 <- t1nh4_soil %>%
+mutate(across(starts_with("concentrationt1"), ~ .x * 0.01, .names = "{.col}_mg_g")) 
+
+nh4_t1 <- nh4_t1[, c("sample", "concentrationT1_mg_g")]
+
+#Creating a dataframe without blank
+t2nh4_soil <- t2nh4_soil %>% filter(sample != "bl") 
+
+# mg/mL to mg/g soil conversion
+# KCl extraction: 1 g of soil in 10 mL of KCl
+nh4_t2 <- t2nh4_soil %>%
+mutate(across(starts_with("concentrationt2"), ~ .x * 0.01, .names = "{.col}_mg_g")) 
+
+nh4_t2 <- nh4_t2[, c("sample", "concentrationT2_mg_g")]
+
+
+nh4_tf <- read_excel("synthetic_soil/Results/nh4_concentration_synthetic.xlsx", col_types = c("text", "numeric"))
+library(dplyr)
+
+nh4_total <- nh4_t0 %>%
+left_join(nh4_t1, by = "sample") %>%
+left_join(nh4_t2, by = "sample") %>%
+left_join(nh4_tf, by = "sample")
+
+```
+
+```{r}
+library(dplyr)
+library(tidyr)
+
+amm_long <- nh4_total %>%
+pivot_longer(
+cols = starts_with("concentration"),
+names_to = "time",
+values_to = "concmgg") %>%
+mutate(
+time = case_when(
+      time == "concentrationT0_mg_g"   ~ "T0",
+      time == "concentrationT1_mg_g"   ~ "T1",
+      time == "concentrationT2_mg_g"   ~ "T2",
+      time == "concentrationsoil_mg_g" ~ "TF",
+      TRUE ~ time))
+
+# Add block column
+amm_long$bloc <- sub("([a-z0-9]+)[a-z][0-9]+", "\\1", amm_long$sample)
+
+# Add soil column
+amm_long$soil <- ifelse(grepl("a", amm_long$sample), "agricole", 
+                  ifelse(grepl("f", amm_long$sample), "forestier", NA))
+
+# Treatment
+amm_long$treatment <- as.numeric(sub(".*([0-9])$", "\\1", amm_long$sample))
+
+# Treatment
+treatment_map <- c("10^-8", "10^-6", "10^-4", "10^-2", "10^0", "0")
+amm_long$treatment <- treatment_map[amm_long$treatment]
+as.factor(amm_long$treatment)
+
+amm_long$concmgg[amm_long$concmgg < 0] <- 0
+
+```
+
+#Amonnification
+```{r}
+
+ammonif_taux <- amm_long %>%
+filter(time %in% c("T0", "T2","TF")) %>%        
+mutate(concmgkg = concmgg * 1000) %>%        # conversion mg/g to mg/kg
+dplyr::select(sample, time, concmgkg, bloc, soil, treatment) %>%
+pivot_wider(names_from = time, values_from = concmgkg) %>%
+mutate(rate_mgkg_day_7day = (T2 - T0) / 7) %>%
+mutate(rate_mgkg_day_14day = (TF - T0) / 14)                    
+
+ammonif_taux$rate_mgkg_day_7day[ammonif_taux$rate_mgkg_day_7day < 0] <- 0
+ammonif_taux$rate_mgkg_day_14day[ammonif_taux$rate_mgkg_day_14day < 0] <- 0
+
+ammonif_agri <- ammonif_taux %>%
+filter(soil == "agricole")
+
+ammonif_fo <- ammonif_taux %>%
+filter(soil == "forestier")
+
+outlier<- ammonif_taux %>%
+group_by(bloc) %>%
+identify_outliers("rate_mgkg_day_14day")
+
+#Nitrif crop
+model<- lm(sqrt(rate_mgkg_day_14day) ~ treatment, data = ammonif_agri)
+# Shapiro-Wilk
+shapiro_test(residuals(model))
+# p.value=0.0310
+bartlett.test(sqrt(ammonif_agri$rate_mgkg_day_14day), ammonif_agri$treatment)
+#p-value 0.9824
+
+#Nitrif Forest
+model<- lm(sqrt(rate_mgkg_day_14day) ~ treatment, data = ammonif_fo)
+# Shapiro-Wilk
+shapiro_test(residuals(model))
+# p.value=0.160
+bartlett.test(sqrt(ammonif_fo$rate_mgkg_day_14day), ammonif_fo$treatment)
+#p-value 0.5797
+
+aovagri <- aov(sqrt(sqrt(rate_mgkg_day_14day)) ~ treatment+bloc, data=ammonif_agri)
+summary(aovagri)
+#            Df Sum Sq Mean Sq F value  Pr(>F)   
+#treatment    5  0.509  0.1017   0.606  0.696
+#bloc         4  1.118  0.2794   1.665  0.198
+#Residuals   20  3.357  0.1678      
+
+aovforest <- aov(sqrt(rate_mgkg_day_14day) ~ treatment+bloc , data=ammonif_fo)
+summary(aovforest)
+#            Df Sum Sq Mean Sq F value Pr(>F)
+#treatment    5  6.272   1.254   0.969  0.460
+#bloc         4  7.262   1.815   1.403  0.269
+#Residuals   20 25.888   1.294   
+
+ggplot(ammonif_taux, aes(x=treatment, y=rate_mgkg_day_14day, color=treatment, group=treatment))+   geom_boxplot(outlier.shape = NA, alpha=0.5) + 
+  geom_point(size=2, alpha=0.2) +facet_grid(~soil )
+
+```
+
+# Mineralization
+```{r}
+ammonif <- ammonif_taux %>% dplyr::select(sample,bloc,soil,treatment,rate_mgkg_day_14day)
+nitrif <- nitrif_taux %>% dplyr::select(sample,bloc,soil,treatment,rate_mgkg_day_14day)
+
+ammonif <- ammonif %>%dplyr::rename(rate_a = rate_mgkg_day_14day)
+ammonif$Ammonification<-ammonif$rate_a
+nitrif <- nitrif %>%dplyr::rename(rate_n = rate_mgkg_day_14day)
+nitrif$Nitrification<-nitrif$rate_n
+
+mineralize <- left_join(ammonif, nitrif, by = c("sample","bloc","soil","treatment"))
+mineralize <- mineralize %>% mutate(rate_mineraliz =(Ammonification+Nitrification))
+mineralize$mineralization <-mineralize$rate_mineraliz
+
+min_agri <- mineralize %>%
+filter(soil == "agricole")
+
+min_fo <- mineralize%>%
+filter(soil == "forestier")
+
+#mineralization crop
+model<- lm(sqrt(sqrt(rate_mineraliz)) ~ treatment, data = min_agri)
+# Shapiro-Wilk
+shapiro_test(residuals(model))
+# p.value=0.0577
+bartlett.test(sqrt(sqrt(min_agri$rate_mineraliz)), min_agri$treatment)
+#p-value 0.527
+
+#Mineralization Forest
+model<- lm(sqrt(rate_mineraliz) ~ treatment, data = min_fo)
+# Shapiro-Wilk
+shapiro_test(residuals(model))
+# p.value=0.0686
+bartlett.test(sqrt(min_fo$rate_mineraliz), min_fo$treatment)
+#p-value 0.4474
+
+aovagri <- aov(sqrt(sqrt(rate_mineraliz)) ~ treatment+bloc, data=min_agri)
+summary(aovagri)
+#            Df Sum Sq Mean Sq F value Pr(>F)
+#treatment    5 0.5372 0.10744   1.337  0.289
+#bloc         4 0.6149 0.15372   1.913  0.148
+#Residuals   20 1.6074 0.08037      
+
+aovforest <- aov(sqrt(rate_mineraliz) ~ treatment+bloc , data=min_fo)
+summary(aovforest)
+#            Df Sum Sq Mean Sq F value Pr(>F)
+#treatment    5  5.258   1.052   1.034  0.425
+#bloc         4  5.589   1.397   1.375  0.278
+#Residuals   20 20.331   1.017   
+
+```
+
+#Plot mineralization
+```{r}
+# Long format
+min_fo <- min_fo %>% pivot_longer(cols = c(Ammonification, Nitrification), names_to = "process", values_to = "value") 
+min_agri <- min_agri %>% pivot_longer(cols = c(Ammonification, Nitrification), names_to = "process", values_to = "value") 
+
+# Crop
+summary_process <- min_agri %>%
+group_by(treatment, process) %>%
+summarise(mean_value = mean(value),
+se = sd(value) / sqrt(n()),
+.groups = "drop")
+
+summary_total <- summary_process %>%
+group_by(treatment) %>%
+summarise(mean_value = sum(mean_value),
+se = sqrt(sum(se^2)),   
+process = "Mineralization",
+.groups = "drop")
+
+summary_all <- bind_rows(summary_process, summary_total)
+
+
+couleurs <- c(
+  "Ammonification" = "#8ABAD3",       
+  "Nitrification" = "#D28CB2",       
+  "Mineralization" = "#FD8D3C" )
+
+# Treatment order
+summary_all$treatment <- factor(summary_all$treatment, 
+                                levels = c("10^0", "10^-2", "10^-4", "10^-6", "10^-8", "0"))
+
+comparaison_lettres <- data.frame(
+  treatment = c("0", "10^-8", "10^-6", "10^-4", "10^-2", "10^0"),
+  label = c("a", "a", "b", "b", "a", "a"),
+  y.position = c(1, 1, 1, 1, 1, 1)  
+)
+
+
+agribar <- ggplot() + geom_bar(
+    data = subset(summary_all, process == "Mineralization"),
+    aes(x = treatment, y = mean_value, fill = process),
+    stat = "identity",
+    width = 0.5,       
+    alpha = 0.3,          
+    color = "gray50",
+    linewidth = 0 ) +
+  geom_errorbar(
+    data = subset(summary_all, process == "Mineralization"),
+    aes(x = treatment, ymin = mean_value - se, ymax = mean_value + se),
+    width = 0.15,
+    color = "#FD8D3C",
+    linewidth = 0.5,
+    alpha=0.3) +
+  geom_bar(
+    data = subset(summary_all, process != "Mineralization"),
+    aes(x = treatment, y = mean_value, fill = process),
+    stat = "identity",
+    position = position_dodge(width = 0.5),
+    width = 0.42,
+    color = "gray30",
+    linewidth = 0) +
+  geom_errorbar(
+    data = subset(summary_all, process != "Mineralization"),
+    aes(x = treatment,
+        ymin = mean_value - se,
+        ymax = mean_value + se,
+        color = process),
+    position = position_dodge(width = 0.5),
+    width = 0.15,
+    linewidth = 0.6,
+    alpha= 0.4) + scale_x_discrete(labels = c("10^0" = "D0",
+                                   "10^-2" = "D2",
+                                  "10^-4" = "D4",
+                                  "10^-6" = "D6",
+                                  "10^-8" = "D8", 
+                                  "0" = "CTL"))+
+labs(x = NULL, y = "Mean rate (mg N/kg/day)", fill = NULL, color = NULL) +
+scale_fill_manual(values = couleurs) +
+scale_color_manual(values = couleurs) +
+theme_classic(base_size = 12) +
+theme(
+axis.text.x = element_text(angle = 45, hjust = 1),
+legend.position = "right",
+legend.title = element_text(size = 12),
+legend.text = element_text(size = 10),  axis.line = element_line(colour = "gray95", size=0))  + guides(color = "none") +   geom_text(data = comparaison_lettres,
+aes(x = treatment, y = y.position, label = label),
+inherit.aes = FALSE,
+size = 5, color = "#D28CB2")
+  
+
+# Forest
+summary_processfo <- min_fo %>%
+group_by(treatment, process) %>%
+summarise(mean_value = mean(value),
+se = sd(value) / sqrt(n()),
+.groups = "drop")
+
+summary_totalfo <- summary_processfo %>%
+group_by(treatment) %>%
+summarise(mean_value = sum(mean_value),
+se = sqrt(sum(se^2)),   # approx
+process = "Mineralization",
+.groups = "drop")
+
+summary_fo <- bind_rows(summary_processfo, summary_totalfo)
+
+
+couleursfo <- c(
+"Ammonification" = "#8ABAD3",       
+"Nitrification" = "#D28CB2",       
+"Mineralization" = "#74C476" )
+
+# treatment order
+summary_fo$treatment <- factor(summary_fo$treatment, 
+                                levels = c("10^0", "10^-2", "10^-4", "10^-6", "10^-8", "0"))
+
+
+fobar <- ggplot() + geom_bar(
+data = subset(summary_fo, process == "Mineralization"),
+aes(x = treatment, y = mean_value, fill = process),
+stat = "identity",
+width = 0.5,           
+alpha = 0.3,           
+color = "gray50",
+linewidth = 0) +
+geom_errorbar(data = subset(summary_fo, process == "Mineralization"),
+aes(x = treatment, ymin = mean_value - se, ymax = mean_value + se),
+width = 0.15,
+color = "#74C476",
+linewidth = 0.5,
+alpha=0.3) +
+geom_bar(data = subset(summary_fo, process != "Mineralization"),
+aes(x = treatment, y = mean_value, fill = process),
+stat = "identity",
+position = position_dodge(width = 0.5),
+width = 0.42,
+color = "gray30",
+linewidth = 0) +
+geom_errorbar(data = subset(summary_fo, process != "Mineralization"),
+aes(x = treatment, ymin = mean_value - se, ymax = mean_value + se, color = process), position = position_dodge(width = 0.5), width = 0.15, linewidth = 0.6, alpha= 0.4) + scale_x_discrete(labels = c("10^0" = "D0", "10^-2" = "D2", "10^-4" = "D4", "10^-6" = "D6", "10^-8" = "D8", "0" = "CTL"))+
+labs(x = NULL, y = NULL, fill = NULL, color = NULL) +
+scale_fill_manual(values = couleursfo) +
+scale_color_manual(values = couleursfo) +
+theme_classic(base_size = 12) +
+theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position = "right", legend.title = element_text(size = 12), legend.text = element_text(size = 10),  axis.line = element_line(colour = "gray95", size=0))  + guides(color = "none") 
+
+
+max_mine <- max(c(summary_fo$mean_value, summary_all$mean_value), na.rm = TRUE)
+ylim_min <- c(0, max_mine * 1.5)
+agribar<- agribar + coord_cartesian(ylim = ylim_min)
+fobar <- fobar + coord_cartesian(ylim = ylim_min)
+
+minera<-ggarrange(agribar, fobar, ncol = 2, labels = c("A","B"), legend = "bottom")
+
+
+ggsave("synthetic_soil/Figures/Fig_4_mineralization_synt.tiff",plot=minera, dpi=600, compression="lzw",   width = 12.07,
+  height = 10.01,
+  units = "in")
+```
+
+# Dataframe process + enzymes
+```{r}
+enzyme <- read_excel("synthetic_soil/Results/results_synthetic_enzyme_nitrogen.xlsx",col_types = c("text","numeric", "numeric","numeric","numeric","numeric","text","text", "text"))
+
+merged_process_enzyme <- mineralize %>%
+left_join(enzyme %>% dplyr::select(sample, bloc, soil, Bglucosidase, Protease, Desaminase),
+by = c("sample", "bloc", "soil")) 
+  
+merged_process_enzyme<- merged_process_enzyme %>% dplyr::select(sample, bloc, soil, treatment, Ammonification, Nitrification, mineralization, Bglucosidase, Protease, Desaminase)
+
+write_xlsx(merged_process_enzyme, path = "synthetic_soil/Results/result_process_enzyme_synthetic.xlsx")
+
+
+```
+
+

@@ -1,0 +1,764 @@
+---
+title: "03-enzyme_nitrate_stat-final"
+author: "Emmy"
+date: "2025-08-22"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+# Importing data
+```{r}
+library(dplyr)
+library(purrr)
+
+nh4 <- read_excel("synthetic_soil/Results/nh4_concentration_synthetic.xlsx", col_types = c("text", "numeric"))
+names(nh4) <- tolower(names(nh4))
+nh4 <- nh4 %>% dplyr::rename(sample = 1, NH4 = 2)
+
+no3 <- read_excel("synthetic_soil/Results/no3_concentration_synthetic.xlsx", col_types = c("text", "numeric"))
+names(no3) <- tolower(names(no3))
+no3 <- no3 %>% dplyr::rename(sample = 1, NO3 = 2)
+
+bgluco <- read_excel("synthetic_soil/Results/bglucosidase_activity_synthetic.xlsx", col_types = c("text", "numeric", "numeric"))
+names(bgluco) <- tolower(names(bgluco))
+bgluco <- bgluco %>% dplyr:: select(1, 3)
+bgluco <- bgluco %>% dplyr::rename(sample = 1, Bglucosidase = 2)
+
+prot <- read_excel("synthetic_soil/Results/protease_activity_synthetic.xlsx", col_types = c("text", "numeric"))
+names(prot) <- tolower(names(prot))
+prot <- prot %>% dplyr::rename(sample = 1, Protease = 2)
+
+des <- read_excel("synthetic_soil/Results/desaminase_activity_synthetic.xlsx", col_types = c("text", "numeric"))
+names(des) <- tolower(names(des))
+des <- des %>% dplyr::rename(sample = 1, Desaminase = 2)
+
+# Merge everything
+results <- nh4 %>%
+full_join(no3,    by = "sample") %>%
+full_join(bgluco, by = "sample") %>%
+full_join(prot,   by = "sample") %>%
+full_join(des,    by = "sample") %>%
+arrange(sample)
+
+
+results$Bglucosidase[results$Bglucosidase < 0] <- 0
+results$Protease[results$Protease < 0] <- 0
+results$NO3[results$NO3 < 0] <- 0
+results$NH4[results$NH4 < 0] <- 0
+results$Desaminase[results$Desaminase < 0] <- 0
+```
+
+
+```{r}
+#  Add a "block" column with the prefix (ex: "b1")
+results$bloc <- sub("([a-z0-9]+)[a-z][0-9]+", "\\1", results$sample)
+
+#  Add a "soil" column  (a = crop, f = forest)
+results$soil <- ifelse(grepl("a", results$sample), "agricole", 
+                  ifelse(grepl("f", results$sample), "forestier", NA))
+
+#  Extract the last digit to know the dilution treatment 
+results$treatment <- as.numeric(sub(".*([0-9])$", "\\1", results$sample))
+
+# Add dilution treatment
+treatment_map <- c("10^-8", "10^-6", "10^-4", "10^-2", "10^0", "0")
+results$treatment <- treatment_map[results$treatment]
+as.factor(results$treatment)
+
+write_xlsx(results, path = "synthetic_soil/Results/results_synthetic_enzyme_nitrogen.xlsx")
+
+agricole <- results %>%
+  filter(soil == "agricole")
+
+forestier <- results %>%
+  filter(soil == "forestier")
+
+```
+
+#Crop soil
+## Assumptions
+### Outliers
+```{r}
+outlierammonium<- agricole %>%
+  group_by(bloc) %>%
+  identify_outliers("NH4")
+
+outliernitrate<- agricole %>%
+  group_by(bloc) %>%
+  identify_outliers("NO3")
+
+
+outlierprotease<- agricole %>%
+  group_by(bloc) %>%
+  identify_outliers("Protease")
+# b1a6 b4a6
+
+outlierbgluco<- agricole %>%
+  group_by(bloc) %>%
+  identify_outliers("Bglucosidase")
+#b2a1 b3a3
+
+outlierdes<- agricole %>%
+  group_by(bloc) %>%
+  identify_outliers("Desaminase")
+#b1a4 b3a3
+```
+
+### Check for normality of residuals
+```{r}
+
+# nitrate
+model<- lm(sqrt(NO3) ~ treatment, data = agricole)
+# QQ plot
+ggqqplot(residuals(model))
+# Shapiro-Wilk
+shapiro_test(residuals(model))
+# p.value=0.698
+
+#ammonium
+modelamm<- lm( sqrt(NH4) ~ treatment, data = agricole)
+# QQ plot
+ggqqplot(residuals(modelamm))
+# Shapiro-Wilk
+shapiro_test(residuals(modelamm))
+# p.value=0.335
+
+#protease
+modelprot<- lm( sqrt(Protease) ~ treatment, data = agricole)
+# QQ plot
+ggqqplot(residuals(modelprot))
+#  Shapiro-Wilk
+shapiro_test(residuals(modelprot))
+# p.value=0.0957
+
+#desaminase
+modeld<- lm( sqrt(Desaminase) ~ treatment, data = agricole)
+# QQ plot 
+ggqqplot(residuals(modeld))
+# Shapiro-Wilk
+shapiro_test(residuals(modeld))
+# p.value= 0.000000169
+
+#bglucosidase
+modelbglu<- lm( sqrt(Bglucosidase) ~ treatment, data = agricole)
+# QQ plot
+ggqqplot(residuals(modelbglu))
+# Shapiro-Wilk
+shapiro_test(residuals(modelbglu))
+# p.value=0.5
+
+```
+
+### Check for homogeneity of variances
+```{r}
+#NITRATE
+bartlett.test(sqrt(agricole$NO3), agricole$treatment)
+#p-value 0.1824
+
+
+#AMMONIUM
+bartlett.test(sqrt(agricole$NH4), agricole$treatment)
+#p-value 0.6581
+
+
+#PROTEASE
+bartlett.test(sqrt(agricole$Protease), agricole$treatment)
+#p-value 0.0389
+
+
+#BGLUCOSIDASE
+bartlett.test(sqrt(agricole$Bglucosidase), agricole$treatment)
+#p-value 0.3897
+
+
+#DESAMINASES
+bartlett.test(sqrt(agricole$Desaminase), agricole$treatment)
+#p-value  2.2<-16
+```
+
+
+## Kruskal-Wallis & ANOVA
+```{r}
+
+kw_protease.a <- kruskal.test(agricole$Protease, agricole$treatment)
+#p-value = 0.1372
+
+kw_desaminase.a <- kruskal.test(agricole$Desaminase, agricole$treatment)
+#p-value 0.6645
+
+aovbglucoa <- aov(sqrt(Bglucosidase) ~ treatment+bloc, data=agricole)
+summary(aovbglucoa)
+TukeyHSD(aovbglucoa)
+#            Df  Sum Sq  Mean Sq F value Pr(>F)  
+#treatment    5 0.03835 0.007671   3.279 0.0253 *
+#bloc         4 0.00718 0.001794   0.767 0.5591  
+#Residuals   20 0.04678 0.002339 
+
+meanbglucoagri<-aggregate(Bglucosidase ~ treatment, data = agricole, mean)
+
+diff4_2 <- (0.8492050/0.1035146)
+
+
+aovnita<- aov(sqrt(NO3) ~ treatment+bloc, data=agricole)
+summary(aovnita)
+#            Df   Sum Sq   Mean Sq F value Pr(>F)  
+#treatment    5 0.000299 0.0000597   0.375 0.8597  
+#bloc         4 0.002156 0.0005391   3.388 0.0286 *
+#Residuals   20 0.003183 0.0001591 
+
+aovamma <- aov(sqrt(NH4) ~ treatment+bloc, data=agricole)
+summary(aovamma)
+#            Df  Sum Sq  Mean Sq F value Pr(>F)
+#treatment    5 0.00527 0.001055   0.469  0.794
+#bloc         4 0.00921 0.002301   1.024  0.419
+#Residuals   20 0.04494 0.002247 
+```
+
+
+#Forest soil
+## Assumptions
+### Outliers
+```{r}
+outlierammonium<- forestier %>%
+  group_by(bloc) %>%
+  identify_outliers("NH4")
+
+
+outliernitrate<- forestier %>%
+  group_by(bloc) %>%
+  identify_outliers("NO3")
+#b1f4
+
+
+outlierprotease<- forestier %>%
+  group_by(bloc) %>%
+  identify_outliers("Protease")
+#b5f5
+
+
+outlierbgluco<- forestier %>%
+  group_by(bloc) %>%
+  identify_outliers("Bglucosidase")
+
+
+outlierdes<- forestier %>%
+  group_by(bloc) %>%
+  identify_outliers("Desaminase")
+# b3f6 b4f3
+
+```
+
+### Check for normality of residuals
+```{r}
+# nitrate
+model<- lm(sqrt(NO3) ~ treatment, data = forestier)
+# QQ plot
+ggqqplot(residuals(model))
+#Shapiro-Wilk
+shapiro_test(residuals(model))
+# p.value=0.118
+
+#ammonium
+modelamm<- lm( sqrt(NH4) ~ treatment, data = forestier)
+# QQ plot
+ggqqplot(residuals(modelamm))
+# Shapiro-Wilk
+shapiro_test(residuals(modelamm))
+# p.value=0.0829
+
+#protease
+
+modelprot<- lm( sqrt(Protease) ~ treatment, data = forestier)
+# QQ plot 
+ggqqplot(residuals(modelprot))
+# Shapiro-Wilk
+shapiro_test(residuals(modelprot))
+# p.value=0.291
+
+#desaminase
+modeld<- lm( sqrt(Desaminase) ~ treatment, data = forestier)
+# QQ plot
+ggqqplot(residuals(modeld))
+# Shapiro-Wilk
+shapiro_test(residuals(modeld))
+# p.value= 0.00546
+
+#bglucosidase
+modelbglu<- lm( sqrt(Bglucosidase) ~ treatment, data = forestier)
+# QQ plot 
+ggqqplot(residuals(modelbglu))
+# Shapiro-Wilk
+shapiro_test(residuals(modelbglu))
+# p.value=0.105
+
+```
+
+### Check for homogeneity of variances
+```{r}
+#NITRATE
+bartlett.test(sqrt(forestier$NO3), forestier$treatment)
+#p-value 0.5313
+
+#AMMONIUM
+bartlett.test(sqrt(forestier$NH4), forestier$treatment)
+#p-value 0.6409
+
+#PROTEASE
+bartlett.test(sqrt(forestier$Protease), forestier$treatment)
+#p-value 0.4384
+
+#BGLUCOSIDASE
+bartlett.test(sqrt(forestier$Bglucosidase), forestier$treatment)
+#p-value 0.9757
+
+#DESAMINASES
+bartlett.test(sqrt(forestier$Desaminase), forestier$treatment)
+#p-value  <2.2e-16
+
+```
+
+## Kruskal-Wallis & ANOVA
+```{r}
+kw_desaminase.f <- kruskal.test(forestier$Desaminase, forestier$treatment)
+#p-value 0.1712
+
+aovnitf <- aov(sqrt(NO3) ~ treatment+bloc, data=forestier)
+summary(aovnitf)
+#            Df   Sum Sq   Mean Sq F value Pr(>F)
+#treatment    5 0.001336 0.0002672   0.460  0.801
+#bloc         4 0.000708 0.0001770   0.305  0.871
+#Residuals   20 0.011609 0.0005805 
+
+aovammf <- aov(sqrt(NH4) ~ treatment+bloc, data=forestier)
+summary(aovammf)
+#            Df  Sum Sq Mean Sq F value Pr(>F)
+#treatment    5 0.08177 0.01635   1.083  0.399
+#bloc         4 0.08005 0.02001   1.326  0.295
+#Residuals   20 0.30188 0.01509 
+
+aovprotf <- aov(sqrt(Protease) ~ treatment+bloc, data=forestier)
+summary(aovprotf)
+TukeyHSD(aovprotf)
+#            Df   Sum Sq   Mean Sq F value Pr(>F)  
+#treatment    5 0.002259 0.0004517   2.893  0.040 *
+#bloc         4 0.001980 0.0004949   3.170  0.036 *
+#Residuals   20 0.003123 0.0001561
+
+meanprotfo<-aggregate(Protease ~ treatment, data = forestier, mean)
+#  treatment Protease
+#         0 2.759710
+#     10^-2 1.206323
+#     10^-4 4.367463
+#     10^-6 5.603612
+#     10^-8 1.102162
+#      10^0 5.080524
+aovbglucof <- aov(sqrt(Bglucosidase) ~ treatment+bloc, data=forestier)
+summary(aovbglucof)
+#            Df  Sum Sq  Mean Sq F value Pr(>F)  
+#treatment    5 0.01929 0.003859   2.349 0.0785 .
+#bloc         4 0.00533 0.001333   0.811 0.5326  
+#Residuals   20 0.03285 0.001643 
+
+```
+
+# Create dataframes
+```{r}
+kw_protease.a_df <- data.frame(
+  variable  = "Protease",
+  factor    = "treatment",
+  test      = "Kruskal-Wallis",
+  statistic = kw_protease.a$statistic,
+  df        = kw_protease.a$parameter,
+  p         = kw_protease.a$p.value
+)
+
+kw_desaminase.a_df <- data.frame(
+  variable  = "Desaminase",
+  factor    = "treatment",
+  test      = "Kruskal-Wallis",
+  statistic = kw_desaminase.a$statistic,
+  df        = kw_desaminase.a$parameter,
+  p         = kw_desaminase.a$p.value
+)
+
+a.aov.nit_df <- broom::tidy(aovnita)
+a.aov.amm_df <- broom::tidy(aovamma)
+a.aov.bgluco_df <- broom::tidy(aovbglucoa)
+
+write_xlsx(
+  list(
+    "kw_protease_agricole" = kw_protease.a_df,
+    "kw_desaminase_agricole" = kw_desaminase.a_df ,
+    "Anova_nitrate_agricole" = a.aov.nit_df,
+    "Anova_bglucosidase_agricole" = a.aov.bgluco_df,
+    "Anova_ammonium_agricole" = a.aov.amm_df
+  ),
+  path = here("synthetic_soil/Results/synthetic_crop_statistic.xlsx")
+)
+
+kw_desaminase.f_df <- data.frame(
+  variable  = "Desaminase",
+  factor    = "treatment",
+  test      = "Kruskal-Wallis",
+  statistic = kw_desaminase.f$statistic,
+  df        = kw_desaminase.f$parameter,
+  p         = kw_desaminase.f$p.value
+)
+
+
+f.aov.bgluco_df <- broom::tidy(aovbglucof)
+f.aov.nit_df <- broom::tidy(aovnitf)
+f.aov.amm_df <- broom::tidy(aovammf)
+f.aov.prot_df <- broom::tidy(aovprotf)
+
+write_xlsx(
+  list(
+    "Anova_protease_forest" = f.aov.prot_df,
+    "Anova_ammonium_forest" = f.aov.amm_df ,
+    "Anova_nitrate_forest" = f.aov.nit_df,
+    "Anova_bglucosidase_forest" = f.aov.bgluco_df,
+    "kw_desaminase_forest" = kw_desaminase.f_df
+  ),
+  path = here("synthetic_soil/Results/synthetic_forest_statistic.xlsx")
+)
+```
+
+```{r}
+library(ggplot2)
+
+# Color forest
+couleurs <- c("10^0" = "#006D2C","10^-2" = "#31A354","10^-4" = "#74C476","10^-6" = "#BAE4B3","10^-8" = "#EDF8E9","0" = "grey80")
+
+forest <- forestier
+forest$treatment <- factor(forest$treatment, levels = names(couleurs))
+
+plotnitf <- ggplot(forest, aes(x=treatment, y=NO3, fill=treatment, colour=treatment)) + 
+  geom_boxplot(outlier.shape = NA, alpha=0.5) + 
+  geom_point(size=2, alpha=0.2) + 
+  theme_classic() + 
+  labs(y="Nitrate (mg/g soil)", x=NULL) + 
+  scale_fill_manual(values = couleurs) + 
+  scale_color_manual(values = couleurs) + 
+  ggtitle("Nitrate concentration") +scale_x_discrete(labels = c("0" = "CTL", 
+                              "10^-8" = "D8", 
+                              "10^-6" = "D6",
+                              "10^-4" = "D4", 
+                              "10^-2" = "D2", 
+                              "10^0" = "D0"))+
+  theme(
+    panel.grid.major = element_blank(), 
+    panel.grid.minor = element_blank(), 
+    panel.background = element_blank(), 
+    panel.grid = element_blank(), 
+    axis.line = element_line(colour = "gray95", size=0))+
+  ylim(0,0.10)
+  
+# Color crop
+agri <-agricole
+couleursa <- c("10^0" = "#A63603","10^-2" = "#E6550D","10^-4" = "#FD8D3C","10^-6" = "#FDAE6B", "10^-8" = "#FEE6CE","0" = "grey80")
+
+agri$treatment <- factor(agri$treatment, levels = names(couleursa))
+
+plotnita <- ggplot(agri, aes(x=treatment, y=NO3, fill=treatment, colour=treatment)) + 
+  geom_boxplot(outlier.shape = NA, alpha=0.5) + 
+  geom_point(size=2, alpha=0.2) + 
+  theme_classic() + 
+  labs(y="Nitrate (mg/g soil)", x=NULL) + 
+  scale_fill_manual(values = couleursa) + 
+  scale_color_manual(values = couleursa) + 
+  ggtitle("Nitrate concentration") +scale_x_discrete(labels = c("0" = "CTL", 
+                              "10^-8" = "D8", 
+                              "10^-6" = "D6",
+                              "10^-4" = "D4", 
+                              "10^-2" = "D2", 
+                              "10^0" = "D0"))+
+  theme(
+    panel.grid.major = element_blank(), 
+    panel.grid.minor = element_blank(), 
+    panel.background = element_blank(), 
+    panel.grid = element_blank(), 
+    axis.line = element_line(colour = "gray95", size=0))+
+  ylim(0,0.10)
+
+
+
+
+plotammf <- ggplot(forest, aes(x=treatment, y=NH4, fill=treatment, colour=treatment)) + 
+  geom_boxplot(outlier.shape = NA, alpha=0.5) + 
+  geom_point(size=2, alpha=0.2) + 
+  theme_classic() + 
+  labs(y="Ammonium (mg/g soil)", x=NULL) + 
+  scale_fill_manual(values = couleurs) + 
+  scale_color_manual(values = couleurs) + 
+  ggtitle("Ammonium concentration") + scale_x_discrete(labels = c("0" = "CTL", 
+                              "10^-8" = "D8", 
+                              "10^-6" = "D6",
+                              "10^-4" = "D4", 
+                              "10^-2" = "D2", 
+                              "10^0" = "D0"))+
+  theme(
+    panel.grid.major = element_blank(), 
+    panel.grid.minor = element_blank(), 
+    panel.background = element_blank(), 
+    panel.grid = element_blank(), 
+    axis.line = element_line(colour = "gray95", size=0))+
+  ylim(0,0.4)
+  
+
+plotamma <- ggplot(agri, aes(x=treatment, y=NH4, fill=treatment, colour=treatment)) + 
+  geom_boxplot(outlier.shape = NA, alpha=0.5) + 
+  geom_point(size=2, alpha=0.2) + 
+  theme_classic() + 
+  labs(y="Ammonium concentration (mg/g soil)", x=NULL) + 
+  scale_fill_manual(values = couleursa) + 
+  scale_color_manual(values = couleursa) + 
+  ggtitle("Ammonium concentration") + scale_x_discrete(labels = c("0" = "CTL", 
+                              "10^-8" = "D8", 
+                              "10^-6" = "D6",
+                              "10^-4" = "D4", 
+                              "10^-2" = "D2", 
+                              "10^0" = "D0"))+
+  theme(
+    panel.grid.major = element_blank(), 
+    panel.grid.minor = element_blank(), 
+    panel.background = element_blank(), 
+    panel.grid = element_blank(), 
+    axis.line = element_line(colour = "gray95", size=0))+
+  ylim(0,0.4)
+
+
+plotprotf <- ggplot(forest, aes(x=treatment, y=Protease, fill=treatment, colour=treatment)) + 
+  geom_boxplot(outlier.shape = NA, alpha=0.5) + 
+  geom_point(size=2, alpha=0.2) + 
+  theme_classic() + 
+  labs(y="Tyrosine released (μmol/gsoil h)", x = NULL) + 
+  scale_fill_manual(values = couleurs) + 
+  scale_color_manual(values = couleurs) + 
+  ggtitle("Protease activity") + 
+ scale_x_discrete(labels = c("0" = "CTL", 
+                              "10^-8" = "D8", 
+                              "10^-6" = "D6",
+                              "10^-4" = "D4", 
+                              "10^-2" = "D2", 
+                              "10^0" = "D0"))+
+  theme(
+    panel.grid.major = element_blank(), 
+    panel.grid.minor = element_blank(), 
+    panel.background = element_blank(), 
+    panel.grid = element_blank(), 
+    axis.line = element_line(colour = "grey95", size=0))+ 
+  ylim(0, 16) + annotate("text", x = 3.5, y = 15,
+           label = "ANOVA: p = 0.04 *",
+           size = 4)
+  
+
+plotprota <- ggplot(agri, aes(x=treatment, y=Protease, fill=treatment, colour=treatment)) + 
+  geom_boxplot(outlier.shape = NA, alpha=0.5) + 
+  geom_point(size=2, alpha=0.2) + 
+  theme_classic() + 
+  labs(y="Tyrosine released (μmol/gsoil h)", x= NULL) + 
+  scale_fill_manual(values = couleursa) + 
+  scale_color_manual(values = couleursa) + 
+  ggtitle("Protease activity") + 
+  scale_x_discrete(labels = c("0" = "CTL", 
+                              "10^-8" = "D8", 
+                              "10^-6" = "D6",
+                              "10^-4" = "D4", 
+                              "10^-2" = "D2", 
+                              "10^0" = "D0"))+
+  theme(
+    panel.grid.major = element_blank(), 
+    panel.grid.minor = element_blank(), 
+    panel.background = element_blank(), 
+    panel.grid = element_blank(), 
+    axis.line = element_line(colour = "grey95", size=0)) 
+
+
+plotbglucof <- ggplot(forest, aes(x=treatment, y=Bglucosidase, fill=treatment, colour=treatment)) + 
+  geom_boxplot(outlier.shape = NA, alpha=0.5) + 
+  geom_point(size=2, alpha=0.2) + 
+  theme_classic() + 
+  labs(y="p-nitrophenol released (μmol/gsoil h)", x=NULL) + 
+  scale_fill_manual(values = couleurs) + 
+  scale_color_manual(values = couleurs) + 
+  ggtitle("Bglucosidase activity") + 
+  scale_x_discrete(labels = c("0" = "CTL", 
+                              "10^-8" = "D8", 
+                              "10^-6" = "D6",
+                              "10^-4" = "D4", 
+                              "10^-2" = "D2", 
+                              "10^0" = "D0"))+
+  theme(
+    panel.grid.major = element_blank(), 
+    panel.grid.minor = element_blank(), 
+    panel.background = element_blank(), 
+    panel.grid = element_blank(), 
+    axis.line = element_line(colour = "gray95", size=0))
+  
+
+
+comparaison_lettres <- data.frame(
+  treatment = c("0", "10^-2", "10^-4", "10^-6", "10^-8", "10^0"),
+  label = c("ab", "a", "b", "ab", "ab", "ab"),
+  y = c(1.4, 1.4, 1.4, 1.4, 1.4, 1.4) 
+)
+plotbglucoa <- ggplot(agri, aes(x=treatment, y=Bglucosidase, fill=treatment, colour=treatment)) + 
+  geom_boxplot(outlier.shape = NA, alpha=0.5) + 
+  geom_point(size=2, alpha=0.2) + 
+  theme_classic() + 
+  labs(y="p-nitrophenol released (μmol/gsoil h)", x=NULL) + 
+  scale_fill_manual(values = couleursa) + 
+  scale_color_manual(values = couleursa) + 
+  ggtitle("Bglucosidase activity") + 
+  scale_x_discrete(labels = c("0" = "CTL", 
+                              "10^-8" = "D8", 
+                              "10^-6" = "D6",
+                              "10^-4" = "D4", 
+                              "10^-2" = "D2", 
+                              "10^0" = "D0"))+
+  theme(
+    panel.grid.major = element_blank(), 
+    panel.grid.minor = element_blank(), 
+    panel.background = element_blank(), 
+    panel.grid = element_blank(), 
+    axis.line = element_line(colour = "gray95", size=0)) + annotate("text", x = 3.5, y = 1.57,
+           label = "ANOVA: p = 0.0253 *",
+           size = 4) +   geom_text(data = comparaison_lettres, aes(x = treatment, y = y, label = label),
+            inherit.aes = FALSE, color = "black", size = 5) 
+
+
+plotdesf <- ggplot(forest, aes(x=treatment, y=Desaminase, fill=treatment, colour=treatment)) + 
+  geom_boxplot(outlier.shape = NA, alpha=0.5) + 
+  geom_point(size=2, alpha=0.2) + 
+  theme_classic() + 
+  labs(y="Nitrophenol deaminated (mg/g soil)", x=NULL) + 
+  scale_fill_manual(values = couleurs) + 
+  scale_color_manual(values = couleurs) + 
+  ggtitle("Deaminase activity")   + scale_x_discrete(labels = c("0" = "CTL", 
+                              "10^-8" = "D8", 
+                              "10^-6" = "D6",
+                              "10^-4" = "D4", 
+                              "10^-2" = "D2", 
+                              "10^0" = "D0")) + 
+  theme(
+    panel.grid.major = element_blank(), 
+    panel.grid.minor = element_blank(), 
+    panel.background = element_blank(), 
+    panel.grid = element_blank(), 
+    axis.line = element_line(colour = "gray95", size=0)) 
+
+plotdesa <- ggplot(agri, aes(x=treatment, y=Desaminase, fill=treatment, colour=treatment)) + 
+  geom_boxplot(outlier.shape = NA, alpha=0.5) + 
+  geom_point(size=2, alpha=0.2) + 
+  theme_classic() + 
+  labs(y="Nitrophenol deaminated (mg/g soil)", x=NULL) + 
+  scale_fill_manual(values = couleursa) + 
+  scale_color_manual(values = couleursa) + 
+  ggtitle("Deaminase activity") + scale_x_discrete(labels = c("0" = "CTL", 
+                              "10^-8" = "D8", 
+                              "10^-6" = "D6",
+                              "10^-4" = "D4", 
+                              "10^-2" = "D2", 
+                              "10^0" = "D0")) +
+  theme(
+    panel.grid.major = element_blank(), 
+    panel.grid.minor = element_blank(), 
+    panel.background = element_blank(), 
+    panel.grid = element_blank(), 
+    axis.line = element_line(colour = "gray95", size=0)) 
+
+```
+
+# plot together
+```{r}
+library(ggpubr)
+library(cowplot)
+
+max_prot <- max(c(agri$Protease, forest$Protease), na.rm = TRUE)
+ylim_prot <- c(0, max_prot * 1.05)
+plotprota <- plotprota + coord_cartesian(ylim = ylim_prot)
+plotprotf <- plotprotf + coord_cartesian(ylim = ylim_prot)
+
+max_bgluco <- max(c(agri$Bglucosidase, forest$Bglucosidase), na.rm = TRUE)
+ylim_bgluco <- c(0, max_bgluco * 1.05)
+plotbglucoa <- plotbglucoa + coord_cartesian(ylim = ylim_bgluco)
+plotbglucof <- plotbglucof + coord_cartesian(ylim = ylim_bgluco)
+
+max_des <- max(c(agri$Desaminase, forest$Desaminase), na.rm = TRUE)
+ylim_des <- c(0, max_des * 1.05)
+plotdesa <- plotdesa + coord_cartesian(ylim = ylim_des)
+plotdesf <- plotdesf + coord_cartesian(ylim = ylim_des)
+
+# Remove legends
+plotprota <- plotprota + labs(fill = "Crop dilution", colour = "Crop dilution")
+plotprotf <- plotprotf + labs(fill = "Forest dilution", colour = "Forest dilution")
+
+plotprota   <- plotprota   + theme(legend.position = "none")
+plotbglucoa <- plotbglucoa + theme(legend.position = "none")
+plotdesa    <- plotdesa    + theme(legend.position = "none")
+plotprotf   <- plotprotf   + theme(legend.position = "none")
+plotbglucof <- plotbglucof + theme(legend.position = "none")
+plotdesf    <- plotdesf    + theme(legend.position = "none")
+
+
+#  Crop Legend
+legend1 <- get_legend(
+  plotprota +
+    labs(fill = "Crop dilution", colour = "Crop dilution") +
+    scale_fill_manual(values = couleursa,
+                      labels = c("0" = "CTL", "10^-8" = "D8",
+                                 "10^-6" = "D6", "10^-4" = "D4",
+                                 "10^-2" = "D2", "10^0"  = "D0")) +
+    scale_color_manual(values = couleursa,
+                       labels = c("0" = "CTL", "10^-8" = "D8",
+                                  "10^-6" = "D6", "10^-4" = "D4",
+                                  "10^-2" = "D2", "10^0"  = "D0")) +
+    theme(legend.position = "bottom",
+          legend.background = element_rect(fill = "transparent", color = NA),
+          legend.key = element_rect(fill = "transparent", color = NA))
+)
+
+# Forest legend
+legend2 <- get_legend(
+  plotprotf +
+    labs(fill = "Forest dilution", colour = "Forest dilution") +
+    scale_fill_manual(values = couleurs,
+                      labels = c("0" = "CTL", "10^-8" = "D8",
+                                 "10^-6" = "D6", "10^-4" = "D4",
+                                 "10^-2" = "D2", "10^0"  = "D0")) +
+    scale_color_manual(values = couleurs,
+                       labels = c("0" = "CTL", "10^-8" = "D8",
+                                  "10^-6" = "D6", "10^-4" = "D4",
+                                  "10^-2" = "D2", "10^0"  = "D0")) +
+    theme(legend.position = "bottom",
+          legend.background = element_rect(fill = "transparent", color = NA),
+          legend.key = element_rect(fill = "transparent", color = NA))
+)
+
+
+
+
+
+ligne1 <- ggarrange(plotprota, plotbglucoa, plotdesa,
+                    ncol = 3, labels = c("A","B","C"))
+ligne2 <- ggarrange(plotprotf, plotbglucof, plotdesf,
+                    ncol = 3, labels = c("D","E","F"))
+
+# Merge legend
+legends <- plot_grid(legend1, legend2, ncol = 2)
+
+
+figure_final <- plot_grid(
+  ligne1,
+  ligne2,
+  legends,
+  ncol = 1,
+  rel_heights = c(1, 0.8, 0.2)
+)
+
+
+
+ggsave("synthetic_soil/Figures/Fig_3_Enzyme_synt.tiff",plot=figure_final, dpi=600, compression="lzw",   width = 12.07,
+  height = 10.01,
+  units = "in")
+```

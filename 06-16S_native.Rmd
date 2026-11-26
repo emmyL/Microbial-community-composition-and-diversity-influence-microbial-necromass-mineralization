@@ -1,0 +1,597 @@
+---
+title: "04-16S-origine"
+author: "Emmy"
+date: "2025-08-21"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+This R script is for 16S data of the native soil.
+
+# Load everything
+```{r}
+results <- read_excel("sample_name_sequencing.xlsx",col_types = c("text","text", "text","text","text","text", "text"))
+
+enzyme <- read_excel("native_soil/Results/results_native_enzyme_nitrogen.xlsx",col_types = c("text","numeric", "numeric","numeric","numeric","numeric","text","text", "text"))
+
+load("16s_sequencing_result/seqtab.nochim.16s.rdata")
+
+load("16s_sequencing_result/taxamatrix.16s.rdata")
+
+load("16s_sequencing_result/phyloseq_filtered_16s.Rdata")
+
+load("16s_sequencing_result/asv_16s_mapping.Rdata")
+```
+
+
+```{r}
+ps_ori <- subset_samples(ps_consensus, sampling_time == "ori")
+sample_names(ps_ori)[sample_names(ps_ori) == "ori21f2"] <- "orib2f2"
+sample_names(ps_ori)[sample_names(ps_ori) == "oribi31"] <- "orib3f1"
+ps_agri <- subset_samples(ps_ori, soil == "a")
+ps_fo <- subset_samples(ps_ori, soil == "f")
+
+nbragri <- prune_taxa(taxa_sums(ps_agri) > 0, ps_agri)
+
+ntaxa(nbragri) #868 ASVs
+
+nsamples(ps_agri)  # Number of samples 23
+
+nbrforest <- prune_taxa(taxa_sums(ps_fo) > 0, ps_fo)
+
+ntaxa(nbrforest) #844 ASVs
+
+nsamples(ps_fo)  # Number of samples 23
+
+#Remove no reads samples
+ps_agri <- prune_samples(sample_sums(ps_agri) > 0, ps_agri)
+
+ps_fo <- prune_samples(sample_sums(ps_fo) > 0, ps_fo)
+```
+
+# Crop soil
+## Alpha diversity
+```{r}
+# alpha diversity
+alpha_divagri <- estimate_richness(ps_agri, measures = c("Shannon", "Simpson","Observed", "Chao1"))
+
+# Adding metadata
+metadataagri <- as.data.frame(sample_data(ps_agri))
+
+# Merge alpha diversity and metadata
+alpha_divagri<- cbind(metadataagri, alpha_divagri)
+
+#Coefficient of variation CTL
+alpha_divagri %>% filter(treatment == "ctl") %>%
+summarise(CV = (sd(Shannon, na.rm = TRUE) / mean(Shannon, na.rm = TRUE)) * 100) #108.7366
+
+```
+
+## Kruskal-Wallis alpha diversity
+```{r}
+library(ggpubr)
+library(FSA)
+
+indices <- c("Shannon", "Simpson", "Observed", "Chao1")
+variables <- c("block", "treatment")
+
+resultats_kw_agri <- expand_grid(indice = indices, variable = variables) %>%
+rowwise() %>%
+mutate(p_value = kruskal.test(as.formula(paste(indice, "~", variable)), data = alpha_divagri)$p.value) %>%
+ungroup() %>%
+group_by(variable) %>%
+mutate(p_corrigee = p.adjust(p_value, method = "BH")) %>%
+ungroup()
+
+resultats_kw_agri
+
+# posthoc
+dunnshannon<-dunnTest(Shannon ~ treatment, data = alpha_divagri, method = "bh")%>%
+  add_significance()
+
+dunnsimpson<-dunnTest(Simpson ~ treatment, data = alpha_divagri, method = "bh")%>%
+  add_significance()
+
+dunnobs<-dunnTest(Observed ~ treatment, data = alpha_divagri, method = "bh")%>%
+  add_significance()
+
+dunnchao<-dunnTest(Chao1 ~ treatment, data = alpha_divagri, method = "bh")%>%
+  add_significance()
+
+# crop soil color
+colors_treatment <- c(
+  "ctl"    = "grey70", 
+  "10^-08" = "#FEE6CE",  
+  "10^-06" = "#FDAE6B",  
+  "10^-04" = "#FD8D3C",  
+  "10^-02" = "#E6550D",  
+  "10^-0"  = "#A63603")
+
+treatment_names <- c(
+  "ctl"    = "CTL", 
+  "10^-08" = "D8",  
+  "10^-06" = "D6",  
+  "10^-04" = "D4",  
+  "10^-02" = "D2",  
+  "10^-0"  = "D0")
+
+lettres_shannon <- data.frame(
+  treatment = c("10^-0", "10^-02", "10^-04", "10^-06", "10^-08", "ctl"),
+  lettre = c("a", "ab", "abc", "bc", "c", "bc"), y = c(6, 6, 6, 6, 6, 6))
+
+shannonagri <- ggplot(alpha_divagri, aes(x=treatment, y=Shannon, fill=treatment, color=treatment)) +  
+geom_boxplot(outlier.shape = NA, alpha=0.5) + 
+geom_point(size=2, alpha=0.2)+
+scale_fill_manual(name="Dilution", values=colors_treatment, labels=treatment_names) +
+scale_color_manual(name="Dilution", values=colors_treatment, labels=treatment_names) +
+scale_x_discrete(labels=treatment_names) +
+theme_minimal() +
+labs(x="", y="Shannon diversity index") +
+theme( legend.position = "none", panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), panel.grid = element_blank(), axis.line = element_line(colour = "gray95", size=0)) +
+geom_text(data = lettres_shannon, aes(x = treatment, y = y, label = lettre), inherit.aes = FALSE)
+
+simpsonagri <- ggplot(alpha_divagri, aes(x=treatment, y=Simpson, fill=treatment, color=treatment)) +  
+geom_boxplot(outlier.shape = NA, alpha=0.5) + 
+geom_point(size=2, alpha=0.2)+
+scale_fill_manual(name="Dilution", values=colors_treatment, labels=treatment_names) +
+scale_color_manual(name="Dilution", values=colors_treatment, labels=treatment_names) +
+scale_x_discrete(labels=treatment_names) +
+theme_minimal() +
+labs(x="", y="Simpson diversity index") +
+theme( legend.position = "none", panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), panel.grid = element_blank(), axis.line = element_line(colour = "gray95", size=0)) 
+
+chaoagri <- ggplot(alpha_divagri, aes(x=treatment, y=Chao1, fill=treatment, color=treatment)) +  
+geom_boxplot(outlier.shape = NA, alpha=0.5) + 
+geom_point(size=2, alpha=0.2)+
+scale_fill_manual(name="Dilution", values=colors_treatment, labels=treatment_names) +
+scale_color_manual(name="Dilution", values=colors_treatment, labels=treatment_names) +
+scale_x_discrete(labels=treatment_names) +
+theme_minimal() +
+labs(x="", y="Chao1 index") +
+theme( legend.position = "none", panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), panel.grid = element_blank(), axis.line = element_line(colour = "gray95", size=0)) 
+
+obsagri <- ggplot(alpha_divagri, aes(x=treatment, y=Observed, fill=treatment, color=treatment)) +  
+geom_boxplot(outlier.shape = NA, alpha=0.5) + 
+geom_point(size=2, alpha=0.2)+
+scale_fill_manual(name="Dilution", values=colors_treatment, labels=treatment_names) +
+scale_color_manual(name="Dilution", values=colors_treatment, labels=treatment_names) +
+scale_x_discrete(labels=treatment_names) +
+theme_minimal() +
+labs(x="", y="Observed") +
+theme( legend.position = "none", panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), panel.grid = element_blank(), axis.line = element_line(colour = "gray95", size=0)) 
+
+```
+
+## Correlations alpha diversity and enzymatic activity
+```{r}
+
+enzyme <- enzyme %>% mutate(sample = paste0("ori", sample))
+
+enzymeagri <- enzyme %>% filter(soil == "agricole")
+
+#Remove CTL because it doesnt make sens to keep it.
+enzyme_agri <- enzymeagri %>% filter(treatment != 0)
+
+alpha_divagri <- alpha_divagri %>% filter (treatment!= "ctl")
+
+div_enzyme <- alpha_divagri %>% left_join(enzyme_agri, by = "sample")
+
+div_indices <- c("Observed", "Chao1", "Shannon", "Simpson")
+enzymes <- c("Protease", "Desaminase", "Bglucosidase")
+
+cor_results <- div_enzyme %>%
+pivot_longer(cols = all_of(div_indices), names_to = "Diversity_index", values_to = "Diversity_value") %>%
+pivot_longer(cols = all_of(enzymes), names_to = "Enzyme", values_to = "Enzyme_activity") %>%
+group_by(Diversity_index, Enzyme) %>%
+cor_test(Diversity_value, Enzyme_activity, method = "spearman") %>%
+ungroup() %>%
+adjust_pvalue(method = "BH") %>%
+add_significance("p.adj")
+
+```
+
+
+## Beta diversity 
+```{r}
+
+ps_agri <- subset_samples(ps_agri, treatment != "ctl")
+
+# abundance table
+otu_agri <- as(otu_table(ps_agri), "matrix")
+
+# In line
+if (taxa_are_rows(ps_agri)) {
+  otu_agri <- t(otu_agri)}
+
+# Hellinger
+otu_hellingeragri <- decostand(otu_agri, method = "hellinger")
+
+
+# Euclidian distance
+dist_hellingeragri <- vegdist(otu_hellingeragri, diag = TRUE, upper = FALSE, method = "euclidean")
+
+# Prep métadat
+metadata_dfagri <- data.frame(sample_data(ps_agri))
+metadata_dfagri$block <- as.factor(metadata_dfagri$block)
+metadata_dfagri$treatment <- as.factor(metadata_dfagri$treatment)
+
+
+# betadisper
+betadisper_resultagri <- betadisper(dist_hellingeragri, group = metadata_dfagri$treatment)
+
+plot(betadisper_resultagri)
+
+anova_res <- anova(betadisper_resultagri) #p-value 0.01644
+
+# values
+F_value <- anova_res$`F value`[1]
+p_anova <- anova_res$`Pr(>F)`[1]
+
+
+# dispersion table
+df_disp <- data.frame(sample = names(betadisper_resultagri$distances),
+distance = betadisper_resultagri$distances, group = metadata_dfagri$treatment)
+
+table_disp <- df_disp %>%
+group_by(group) %>%
+summarise( n = n(), mean_dispersion = mean(distance), sd = sd(distance), se = sd / sqrt(n), .groups = "drop") %>%
+mutate(F_value = F_value, p_anova = p_anova)
+
+# Tukey post-hoc
+tukey_res <- TukeyHSD(betadisper_resultagri)
+
+tukey_table <- as.data.frame(tukey_res$group)
+tukey_table$comparison <- rownames(tukey_table)
+rownames(tukey_table) <- NULL
+
+tukey_table <- tukey_table %>%
+rename( diff = diff, lower = lwr, upper = upr, 'p_adj' = `p adj`)
+
+# Graphbeta-dispersion
+kruskal.test(df_disp$distance ~ df_disp$group) #p-value = 0.01839
+
+dunndisp_agri<-dunnTest(distance ~ group, data = df_disp, method = "bh")%>% add_significance()
+
+lettres_dispagri <- data.frame( treatment = c("10^-0", "10^-02", "10^-04", "10^-06", "10^-08", "ctl"),
+lettre = c("a", "ab", "ab", "ab", "b", "ab"),
+y = c(1.1, 1.1, 1.1, 1.1, 1.1, 1.1))
+
+beta_dispagri <- ggplot(df_disp, aes(x = group, y = distance, fill = group, color=group)) +
+geom_boxplot(outlier.shape = NA, alpha=0.5) +
+geom_point(size=2, alpha=0.2)+
+scale_fill_manual(name="Dilution", values=colors_treatment, labels=treatment_names) +
+scale_color_manual(name="Dilution", values=colors_treatment, labels=treatment_names) +
+scale_x_discrete(labels=treatment_names)+ 
+labs(x = "", y = "Distance to centroid") + theme_minimal()+ 
+theme( legend.position = "none", panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), 
+panel.grid = element_blank(), axis.line = element_line(colour = "gray95", size=0)) +
+geom_text(data = lettres_dispagri, aes(x = treatment, y = y, label = lettre), inherit.aes = FALSE)
+
+
+# Test the independent effects
+library(vegan)
+set.seed(18575748)  
+
+permanova_agri <-adonis2(dist_hellingeragri ~ treatment, data = metadata_dfagri, permutations = 999, by="terms", strata = metadata_dfagri$block)
+
+print(permanova_agri)
+#          Df SumOfSqs     R2      F Pr(>F)    
+#treatment  4   5.8067 0.4226 2.9276  0.001 ***
+#Residual  16   7.9337 0.5774                  
+#Total     20  13.7403 1.0000  
+
+
+permanovaagri_out <- permanova_agri %>%
+tibble::rownames_to_column(var = "Variable")
+write_xlsx(permanovaagri_out, path = "native_soil/Results/permanova_crop_native_16S.xlsx")
+
+```
+
+### PCOA
+```{r}
+# PCoA
+pcoa_res <- cmdscale(dist_hellingeragri, k = 2, eig = TRUE)
+
+# Data frame for ggplot2
+pcoa_df <- data.frame(SampleID = metadata_dfagri$sample,
+PCoA1 = pcoa_res$points[, 1],
+PCoA2 = pcoa_res$points[, 2],
+treatment = metadata_dfagri$treatment)
+
+# PERMANOVA results
+permanova_results <- permanova_agri  
+r2_treatment <- round(permanova_results$R2[1], 3)
+pval_treatment <- signif(permanova_results$`Pr(>F)`[1], 3)
+
+
+# Graph annotation
+annotation_text <- paste("PERMANOVA results:", paste("Dilution: R² =", r2_treatment, ", p =", pval_treatment), sep = "\n")
+
+colors_treatment <- c(
+"ctl"    = "grey70", 
+"10^-08" = "#FEE6CE",  
+"10^-06" = "#FDAE6B",  
+"10^-04" = "#FD8D3C",  
+"10^-02" = "#E6550D",  
+"10^-0"  = "#A63603" )
+
+agripcoa <- ggplot(pcoa_df, aes(x = PCoA1, y = PCoA2, color = treatment)) +
+geom_point(size = 4, alpha = 0.8) + 
+stat_ellipse(aes(group = treatment, color = treatment), linetype = 1, size = 0.5, alpha = 0.8) +
+labs(title = "", x = paste0("PCoA1 (", round(pcoa_res$eig[1] / sum(pcoa_res$eig) * 100, 2), "%)"), y = paste0("PCoA2 (", round(pcoa_res$eig[2] / sum(pcoa_res$eig) * 100, 2), "%)")) +
+scale_color_manual(name = "Dilution", values = colors_treatment, labels = treatment_names)+
+theme_classic() +
+theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), panel.grid = element_blank(), plot.title = element_text(color = "black", size = 11), axis.line = element_line(colour = "white"), panel.border = element_rect(colour = "white", fill = NA, size = 0.5), axis.title = element_text(size = 11, color = "black"), legend.title = element_text(color = "black", size = 11), legend.text = element_text(color = "black")) +
+annotate("text", x = -1, y = -1, label = annotation_text, hjust = 0, size = 4, color = "black")
+
+```
+
+# Forest soil
+## Alpha diversity
+```{r}
+# alpha diversity
+alpha_divfo <- estimate_richness(ps_fo, measures = c("Shannon", "Simpson", "Observed","Chao1"))
+
+# Adding metadata
+metadatafo <- as.data.frame(sample_data(ps_fo))
+
+# Merge alpha diversity and metadata
+alpha_divfo<- cbind(metadatafo, alpha_divfo)
+
+alpha_divfo %>%
+filter(treatment == "ctl") %>%
+summarise(CV = (sd(Shannon, na.rm = TRUE) / mean(Shannon, na.rm = TRUE)) * 100) #76.95485
+
+```
+
+
+```{r}
+library(FSA)
+
+indices <- c("Shannon", "Simpson", "Observed", "Chao1")
+variables <- c("block", "treatment")
+
+resultats_kw_fo <- expand_grid(indice = indices, variable = variables) %>%
+rowwise() %>%
+mutate(p_value = kruskal.test(as.formula(paste(indice, "~", variable)), data = alpha_divfo)$p.value) %>%
+ungroup() %>%
+group_by(variable) %>%
+mutate(p_corrigee = p.adjust(p_value, method = "BH")) %>%
+ungroup()
+
+resultats_kw_fo
+
+# Posthoc
+dunnshannon<-dunnTest(Shannon ~ treatment, data = alpha_divfo, method = "bh")%>%
+  add_significance()
+
+dunnsimpson<-dunnTest(Simpson ~ treatment, data = alpha_divfo, method = "bh")%>%
+  add_significance()
+
+dunnobs<-dunnTest(Observed ~ treatment, data = alpha_divfo, method = "bh")%>%
+  add_significance()
+
+dunnchao<-dunnTest(Chao1 ~ treatment, data = alpha_divfo, method = "bh")%>%
+  add_significance()
+
+# forest color
+colors_treatmentfo <- c("ctl" = "grey80", "10^-08" = "#EDF8E9", "10^-06" = "#BAE4B3","10^-04" = "#74C476", "10^-02" = "#31A354", "10^-0" = "#006D2C")
+
+lettres_shannon_fo <- data.frame(
+treatment = c("10^-0", "10^-02", "10^-04", "10^-06", "10^-08", "ctl"),
+lettre = c("a", "ab", "abc", "c", "bc", "bc"),
+y = c(5, 5, 5, 5, 5, 5)) 
+
+shannonfo <-ggplot(alpha_divfo, aes(x=treatment, y=Shannon, fill=treatment, color=treatment)) +  geom_boxplot(outlier.shape = NA, alpha=0.5) + 
+geom_point(size=2, alpha=0.2)+
+scale_x_discrete(labels=treatment_names)+
+scale_fill_manual(name="Dilution", values=colors_treatmentfo, labels=treatment_names) +
+scale_color_manual(name="Dilution", values=colors_treatmentfo, labels=treatment_names) +
+theme_minimal() + labs(x="", y="Shannon diversity index") + ggtitle("")+
+theme(legend.position = "none", panel.grid.major = element_blank(), panel.grid.minor = element_blank(), 
+panel.background = element_blank(), panel.grid = element_blank(), axis.line = element_line(colour = "gray95", size=0))  +
+geom_text(data = lettres_shannon_fo, aes(x = treatment, y = y, label = lettre), inherit.aes = FALSE)
+
+
+simpsonfo <- ggplot(alpha_divfo, aes(x=treatment, y=Simpson, fill=treatment, color=treatment)) +  
+geom_boxplot(outlier.shape = NA, alpha=0.5) + 
+geom_point(size=2, alpha=0.2)+
+scale_fill_manual(name="Dilution", values=colors_treatmentfo, labels=treatment_names) +
+scale_color_manual(name="Dilution", values=colors_treatmentfo, labels=treatment_names) +
+scale_x_discrete(labels=treatment_names) +
+theme_minimal() + labs(x="", y="Simpson diversity index") +
+theme( legend.position = "none", panel.grid.major = element_blank(), panel.grid.minor = element_blank(), 
+panel.background = element_blank(), panel.grid = element_blank(), axis.line = element_line(colour = "gray95", size=0)) 
+
+chaofo <- ggplot(alpha_divfo, aes(x=treatment, y=Chao1, fill=treatment, color=treatment)) +  
+geom_boxplot(outlier.shape = NA, alpha=0.5) + 
+geom_point(size=2, alpha=0.2)+
+scale_fill_manual(name="Dilution", values=colors_treatmentfo, labels=treatment_names) +
+scale_color_manual(name="Dilution", values=colors_treatmentfo, labels=treatment_names) +
+scale_x_discrete(labels=treatment_names) +
+theme_minimal() +
+labs(x="", y="Chao1 index") +
+theme( legend.position = "none", panel.grid.major = element_blank(), panel.grid.minor = element_blank(), 
+panel.background = element_blank(), panel.grid = element_blank(), axis.line = element_line(colour = "gray95", size=0)) 
+
+obsfo <- ggplot(alpha_divfo, aes(x=treatment, y=Observed, fill=treatment, color=treatment)) +  
+geom_boxplot(outlier.shape = NA, alpha=0.5) + 
+geom_point(size=2, alpha=0.2)+
+scale_fill_manual(name="Dilution", values=colors_treatmentfo, labels=treatment_names) +
+scale_color_manual(name="Dilution", values=colors_treatmentfo, labels=treatment_names) +
+scale_x_discrete(labels=treatment_names) + theme_minimal() + labs(x="", y="Observed") +
+theme( legend.position = "none", panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), panel.grid = element_blank(), axis.line = element_line(colour = "gray95", size=0)) 
+
+
+```
+
+## Correlations Alpha diversity and enzymatic activity 
+```{r}
+enzymefo <- enzyme %>% filter(soil == "forestier")
+
+#Remove CTL because it doesnt make sens to keep it.
+enzymefo <- enzymefo %>% filter(treatment != 0)
+
+alpha_divfo <- alpha_divfo %>% filter (treatment!= "ctl")
+
+
+div_enzymefo <- alpha_divfo %>%
+left_join(enzymefo, by = "sample")
+
+div_indices <- c("Observed", "Chao1", "Shannon", "Simpson")
+enzymes <- c("Protease", "Desaminase", "Bglucosidase")
+
+cor_results_fo <- div_enzymefo %>%
+pivot_longer(cols = all_of(div_indices), names_to = "Diversity_index", values_to = "Diversity_value") %>%
+pivot_longer(cols = all_of(enzymes), names_to = "Enzyme", values_to = "Enzyme_activity") %>%
+group_by(Diversity_index, Enzyme) %>%
+cor_test(Diversity_value, Enzyme_activity, method = "spearman") %>%
+ungroup() %>%
+adjust_pvalue(method = "BH") %>%
+add_significance("p.adj")
+
+```
+
+## Beta diversity
+```{r}
+ps_fo <- subset_samples(ps_fo, treatment != "ctl")
+
+otu_fo <- as(otu_table(ps_fo), "matrix")
+
+if (taxa_are_rows(ps_fo)) {
+  otu_fo <- t(otu_fo)}
+
+# Hellinger t
+ps_hellingerfo <- decostand(otu_fo, method = "hellinger")
+
+# Enclidian distance 
+dist_hellingerfo <- vegdist(ps_hellingerfo, diag=TRUE, upper=FALSE, method = "euclidean")
+
+
+# Extract metadata
+metadatafo <- sample_data(ps_fo)
+metadata_dffo <- data.frame(sample_data(ps_fo))
+metadata_dffo$block <-as.factor(metadata_dffo$block)
+metadata_dffo$treatment <-as.factor(metadata_dffo$treatment)
+
+# Homogeneity of multivariate dispersions
+betadisper_resultfo <- betadisper(dist_hellingerfo, group = metadata_dffo$treatment)
+
+plot(betadisper_resultfo)
+anova_resfo <-anova(betadisper_resultfo)   #(p-value 0.01241)
+permutest(betadisper_resultfo)  # p-value 0.017
+
+# Values
+F_value <- anova_resfo$`F value`[1]
+p_anova <- anova_resfo$`Pr(>F)`[1]
+
+# dispersion table
+df_dispfo <- data.frame(sample = names(betadisper_resultfo$distances), distance = betadisper_resultfo$distances, group = metadata_dffo$treatment)
+
+table_dispfo <- df_dispfo %>%
+group_by(group) %>%
+summarise(n = n(), mean_dispersion = mean(distance), sd = sd(distance), se = sd / sqrt(n), .groups = "drop") %>%
+mutate(F_value = F_value, p_anova = p_anova)
+
+# Tukey post-hoc
+tukey_resfo <- TukeyHSD(betadisper_resultfo)
+tukey_tablefo <- as.data.frame(tukey_resfo$group)
+tukey_tablefo$comparison <- rownames(tukey_tablefo)
+rownames(tukey_tablefo) <- NULL
+
+tukey_tablefo <- tukey_tablefo %>%
+rename(diff = diff, lower = lwr, upper = upr, 'p_adj' = `p adj`)
+
+
+write_xlsx(list(
+"Dispersion-agri" = table_disp,
+"Tukey-agri" = tukey_table,
+"Dispersion-fo" = table_dispfo,
+"Tukey-fo" = tukey_tablefo),
+path = here("native_soil/Results/dispersion_native_16s.xlsx"))
+
+# beta-dispersion
+kruskal.test(df_dispfo$distance ~ df_dispfo$group)
+#p-value = 0.08279
+
+
+beta_dispfo<- ggplot(df_dispfo, aes(x = group, y = distance, fill = group, color=group)) +
+geom_boxplot(outlier.shape = NA, alpha=0.5) +
+geom_point(size=2, alpha=0.2)+
+scale_fill_manual(name="Dilution", values=colors_treatmentfo, labels=treatment_names) +
+scale_color_manual(name="Dilution", values=colors_treatmentfo, labels=treatment_names) +
+scale_x_discrete(labels=treatment_names)+ 
+labs(x = "", y = "Distance to centroid") + theme_minimal() + theme( legend.position = "none", panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), panel.grid = element_blank(), axis.line = element_line(colour = "gray95", size=0)) 
+
+
+library(vegan)
+set.seed(18575748)  
+
+permanova_fo <-adonis2(dist_hellingerfo ~ treatment, data = metadata_dffo, permutations = 999, by="terms", strata = metadata_dffo$block)
+
+print(permanova_fo)
+#               Df SumOfSqs      R2      F Pr(>F)    
+#treatment  4   5.1293 0.37111 2.2129  0.001 ***
+#Residual  15   8.6923 0.62889                  
+#Total     19  13.8216 1.00000    
+
+
+permanovafo_out <- permanova_fo %>%
+  tibble::rownames_to_column(var = "Variable")
+write_xlsx(permanovafo_out, path = "native_soil/Results/permanova_forest_native_16S.xlsx")
+
+
+```
+
+
+### PCOA
+```{r}
+pcoa_res <- cmdscale(dist_hellingerfo, k = 2, eig = TRUE)
+
+# Data frame
+pcoa_df <- data.frame(
+SampleID = metadata_dffo$sample,
+PCoA1 = pcoa_res$points[, 1],
+PCoA2 = pcoa_res$points[, 2],
+treatment = metadata_dffo$treatment)
+
+# PERMANOVA results
+permanova_results <- permanova_fo  
+r2_treatment <- round(permanova_results$R2[1], 3)
+pval_treatment <- signif(permanova_results$`Pr(>F)`[1], 3)
+
+# Graph annotation
+annotation_text <- paste("PERMANOVA results:", paste("Dilution: R² =", r2_treatment, ", p =", pval_treatment), sep = "\n")
+
+fopcoa <- ggplot(pcoa_df, aes(x = PCoA1, y = PCoA2, color = treatment)) +
+geom_point(size = 4, alpha = 0.8) +  
+stat_ellipse(aes(group = treatment, color = treatment), linetype = 1, size = 0.5, alpha = 0.8) +
+labs(title = "", x = paste0("PCoA1 (", round(pcoa_res$eig[1] / sum(pcoa_res$eig) * 100, 2), "%)"), y = paste0("PCoA2 (", round(pcoa_res$eig[2] / sum(pcoa_res$eig) * 100, 2), "%)")) +
+scale_color_manual(name = "Dilution", values = colors_treatmentfo, labels = treatment_names)+
+theme_classic() +
+theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), panel.grid = element_blank(), plot.title = element_text(color = "black", size = 14), axis.line = element_line(colour = "white"), axis.title = element_text(size = 11, color = "black"), 
+legend.title = element_text(color = "black", size = 11), legend.text = element_text(color = "black")) +
+annotate("text", x = -0.75, y = -1, label = annotation_text, hjust = 0, size = 4, color = "black")
+```
+
+# Figures
+```{r}
+library(cowplot)
+
+shannonagri <- shannonagri +
+theme(legend.position = "none") +
+guides(color = "none", fill = "none", shape = "none")
+
+shannonfo <- shannonfo +
+theme(legend.position = "none") +
+guides(color = "none", fill = "none", shape = "none")
+
+
+figure16sori <- ggarrange(shannonagri, agripcoa, beta_dispagri, shannonfo, fopcoa, beta_dispfo,
+labels = c("A", "B", "C", "D", "E", "F"), ncol = 3, nrow = 2, widths = c(0.8, 1, 1) ,           common.legend = FALSE, legend = "left")
+
+ggsave("native_soil/Figures/Fig_S1_16S_native.tiff",plot=figure16sori, dpi=600, compression="lzw",   width = 12.07,
+  height = 10.01,
+  units = "in")
+```
+

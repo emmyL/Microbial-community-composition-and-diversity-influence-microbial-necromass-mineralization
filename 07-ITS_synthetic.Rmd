@@ -1,0 +1,1114 @@
+---
+title: "05-ITS-final"
+output: html_document
+date: "2025-09-12"
+editor_options: 
+  chunk_output_type: console
+---
+
+# Load everything
+```{r}
+results <- read_excel("sample_name_sequencing.xlsx",col_types = c("text","text", "text","text","text","text", "text"))
+
+enzyme <- read_excel("synthetic_soil/Results/result_process_enzyme_synthetic.xlsx", col_types =c("text", "text","text", "text","numeric","numeric","numeric","numeric", "numeric", "numeric") )
+
+load("its_sequencing_result/seqtab.nochim.its.rdata")
+
+load("its_sequencing_result/taxa.matrix.its.rdata")
+
+load("its_sequencing_result/phyloseq_filtered_its.Rdata")
+
+load("its_sequencing_result/asv_its_mapping.Rdata")
+```
+
+# Crop soil
+## Alpha diversity
+```{r}
+ps_tf <- subset_samples(ps_consensus, sampling_time == "tf")
+ps_agri <- subset_samples(ps_tf, soil == "a")
+
+nbragri <- prune_taxa(taxa_sums(ps_agri) > 0, ps_agri)
+
+ntaxa(nbragri) #852
+nsamples(ps_agri)  # Number of samples 29
+
+#alpha diveristy
+alpha_divagri <- estimate_richness(ps_agri, measures = c("Shannon", "Simpson", "Observed", "Chao1"))
+
+# metadata
+metadataagri <- as.data.frame(sample_data(ps_agri))
+
+# Merge alpha diveristy and metadata
+alpha_divagri<- cbind(metadataagri, alpha_divagri)
+
+#Coefficent of variation
+alpha_divagri %>% filter(treatment == "ctl") %>% summarise(CV = (sd(Shannon, na.rm = TRUE) / mean(Shannon, na.rm = TRUE)) * 100) #127.9431
+
+```
+
+## Recap table alpha div
+```{r}
+resume_alpha_agri <- alpha_divagri %>%
+group_by(treatment) %>%
+summarise(n = n(),
+Shannon_moy = mean(Shannon, na.rm = TRUE),
+Shannon_sd = sd(Shannon, na.rm = TRUE),
+Simpson_moy = mean(Simpson, na.rm = TRUE),
+Simpson_sd = sd(Simpson, na.rm = TRUE),
+Observed_moy = mean(Observed, na.rm = TRUE),
+Observed_sd = sd(Observed, na.rm = TRUE),
+Chao1_moy = mean(Chao1, na.rm = TRUE),
+Chao1_sd = sd(Chao1, na.rm = TRUE))
+
+resume_alpha_agri
+```
+
+## Kruskal-Wallis alpha diversity
+```{r}
+library(dplyr)
+library(tidyr)
+library(FSA)
+
+indices <- c("Shannon", "Simpson", "Observed", "Chao1")
+variables <- c("block", "treatment")
+
+resultats_kw_agri <- expand_grid(indice = indices, variable = variables) %>%
+rowwise() %>%
+mutate(p_value = kruskal.test(as.formula(paste(indice, "~", variable)), data = alpha_divagri)$p.value) %>%
+ungroup() %>%
+group_by(variable) %>%
+mutate(p_corrigee = p.adjust(p_value, method = "BH")) %>%
+ungroup()
+
+resultats_kw_agri
+
+# Posthoc
+dunnshannon<-dunnTest(Shannon ~ treatment, data = alpha_divagri, method = "bh")%>%
+add_significance()
+
+dunnsimpson<-dunnTest(Simpson ~ treatment, data = alpha_divagri, method = "bh")%>%
+add_significance()
+
+dunnobs<-dunnTest(Observed ~ treatment, data = alpha_divagri, method = "bh")%>%
+add_significance()
+
+dunnchao<-dunnTest(Chao1 ~ treatment, data = alpha_divagri, method = "bh")%>%
+add_significance()
+
+# crop soil color
+colors_treatment <- c(
+"ctl"    = "grey70", 
+"10^-08" = "#FEE6CE",  
+"10^-06" = "#FDAE6B",  
+"10^-04" = "#FD8D3C",  
+"10^-02" = "#E6550D",  
+"10^-0"  = "#A63603")
+
+treatment_names <- c(
+"ctl"    = "CTL", 
+"10^-08" = "D8",  
+"10^-06" = "D6",  
+"10^-04" = "D4",  
+"10^-02" = "D2",  
+"10^-0"  = "D0")
+
+shannonagri <- ggplot(alpha_divagri, aes(x=treatment, y=Shannon, fill=treatment, color=treatment)) +  
+geom_boxplot(outlier.shape = NA, alpha=0.5) + 
+geom_point(size=2, alpha=0.2)+
+scale_fill_manual(name="Dilution", values=colors_treatment, labels=treatment_names) +
+scale_color_manual(name="Dilution", values=colors_treatment, labels=treatment_names) +
+scale_x_discrete(labels=treatment_names) +
+theme_minimal() +
+labs(x="", y="Shannon diversity index") +
+theme( legend.position = "none", panel.grid.major = element_blank(), panel.grid.minor = element_blank(), 
+panel.background = element_blank(), panel.grid = element_blank(), axis.line = element_line(colour = "gray95", size=0)) 
+
+simpsonagri <- ggplot(alpha_divagri, aes(x=treatment, y=Simpson, fill=treatment, color=treatment)) +  
+geom_boxplot(outlier.shape = NA, alpha=0.5) + 
+geom_point(size=2, alpha=0.2)+
+scale_fill_manual(name="Dilution", values=colors_treatment, labels=treatment_names) +
+scale_color_manual(name="Dilution", values=colors_treatment, labels=treatment_names) +
+scale_x_discrete(labels=treatment_names) +
+theme_minimal() +
+labs(x="", y="Simpson diversity index") +
+theme( legend.position = "none", panel.grid.major = element_blank(), panel.grid.minor = element_blank(), 
+panel.background = element_blank(), panel.grid = element_blank(), axis.line = element_line(colour = "gray95", size=0)) 
+
+chaoagri <- ggplot(alpha_divagri, aes(x=treatment, y=Chao1, fill=treatment, color=treatment)) +  
+geom_boxplot(outlier.shape = NA, alpha=0.5) + 
+geom_point(size=2, alpha=0.2)+
+scale_fill_manual(name="Dilution", values=colors_treatment, labels=treatment_names) +
+scale_color_manual(name="Dilution", values=colors_treatment, labels=treatment_names) +
+scale_x_discrete(labels=treatment_names) +
+theme_minimal() +
+labs(x="", y="Chao1 index") +
+theme( legend.position = "none", panel.grid.major = element_blank(), panel.grid.minor = element_blank(), 
+panel.background = element_blank(), panel.grid = element_blank(), axis.line = element_line(colour = "gray95", size=0)) 
+
+obsagri <- ggplot(alpha_divagri, aes(x=treatment, y=Observed, fill=treatment, color=treatment)) +  
+geom_boxplot(outlier.shape = NA, alpha=0.5) + 
+geom_point(size=2, alpha=0.2)+
+scale_fill_manual(name="Dilution", values=colors_treatment, labels=treatment_names) +
+scale_color_manual(name="Dilution", values=colors_treatment, labels=treatment_names) +
+scale_x_discrete(labels=treatment_names) +
+theme_minimal() +
+labs(x="", y="Observed") +
+theme( legend.position = "none", panel.grid.major = element_blank(), panel.grid.minor = element_blank(), 
+panel.background = element_blank(), panel.grid = element_blank(), axis.line = element_line(colour = "gray95", size=0)) 
+
+```
+
+## Correlation alpha diversity & enzyme
+```{r}
+
+enzyme <- enzyme %>% mutate(sample = paste0("tf", sample))
+
+enzymeagri <- enzyme %>% filter(soil == "agricole")
+
+#Remove CTL because it doesnt make sens to keep it.
+enzyme_agri <- enzymeagri %>% filter(treatment != 0)
+
+alpha_divagri <- alpha_divagri %>% filter (treatment!= "ctl")
+
+div_enzyme <- alpha_divagri %>% left_join(enzyme_agri, by = "sample")
+
+div_indices <- c("Observed", "Chao1", "Shannon", "Simpson")
+enzymes <- c("Protease", "Desaminase", "Bglucosidase","Ammonification", "Nitrification")
+
+cor_results <- div_enzyme %>% pivot_longer(cols = all_of(div_indices), names_to = "Diversity_index",
+values_to = "Diversity_value") %>%
+pivot_longer(cols = all_of(enzymes), names_to = "Enzyme", values_to = "Enzyme_activity") %>%
+group_by(Diversity_index, Enzyme) %>%
+cor_test(Diversity_value, Enzyme_activity, method = "spearman") %>%
+ungroup() %>%
+adjust_pvalue(method = "BH") %>%
+add_significance("p.adj")
+
+write_xlsx(cor_results, path = "synthetic_soil/Results/correlationalpha_crop_synthetic_its.xlsx")
+
+# Prep results
+plot_cor <- cor_results %>%
+mutate(Diversity_index = factor(Diversity_index, levels = c("Observed", "Chao1", "Shannon", "Simpson")),
+Enzyme = factor(Enzyme, levels = c("Protease", "Desaminase", "Bglucosidase", "Ammonification", "Nitrification")), significance = case_when(p.adj < 0.001 ~ "***", p.adj < 0.01  ~ "**", p.adj < 0.05  ~ "*", TRUE ~ ""))
+
+# Heatmap
+corr_alpha_crop <-ggplot(plot_cor, aes(x = Enzyme, y = Diversity_index, fill = cor)) +
+geom_tile(color = "white", linewidth = 0.5) +
+geom_text(aes(label = sprintf("%.3f", p.adj)), size = 3.5)+
+scale_fill_gradient2(low = "#FDAE6B", mid = "white", high = "#A63603", midpoint = 0, limits = c(-1, 1), name = "Spearman's rho") +
+labs(x = "Fonction measured", y = "Alpha diversity index") +
+theme_minimal() +
+theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1), panel.grid = element_blank())
+
+```
+
+## Beta diversity 
+```{r}
+# Abundance table
+otu_agri <- as(otu_table(ps_agri), "matrix")
+
+# Sample in line
+if (taxa_are_rows(ps_agri)) {
+otu_agri <- t(otu_agri)}
+
+# Hellinger
+ps_hellingeragri <- decostand(otu_agri, method = "hellinger")
+
+#  Eucledian distance 
+dist_hellingeragri <- vegdist(ps_hellingeragri, diag=TRUE, upper=FALSE, method = "euclidean")
+
+metadataagri <- sample_data(ps_agri)
+metadata_dfagri <- data.frame(sample_data(ps_agri))
+metadata_dfagri$block <-as.factor(metadata_dfagri$block)
+metadata_dfagri$treatment <-as.factor(metadata_dfagri$treatment)
+
+# Homogeneity of multivariate dispersions
+betadisper_resultagri <- betadisper(dist_hellingeragri, group = metadata_dfagri$treatment)
+
+plot(betadisper_resultagri)
+anova_res <- anova(betadisper_resultagri)  # p-value 0.02492
+
+# Extract values
+F_value <- anova_res$`F value`[1]
+p_anova <- anova_res$`Pr(>F)`[1]
+
+# dispersion table
+df_disp <- data.frame(sample = names(betadisper_resultagri$distances), distance = betadisper_resultagri$distances, group = metadata_dfagri$treatment)
+
+table_disp <- df_disp %>%
+group_by(group) %>%
+summarise(n = n(), mean_dispersion = mean(distance), sd = sd(distance), se = sd / sqrt(n), .groups = "drop") %>%
+mutate(F_value = F_value, p_anova = p_anova)
+
+# Tukey post-hoc
+tukey_res <- TukeyHSD(betadisper_resultagri)
+
+tukey_table <- as.data.frame(tukey_res$group)
+tukey_table$comparison <- rownames(tukey_table)
+rownames(tukey_table) <- NULL
+
+tukey_table <- tukey_table %>% 
+rename(diff = diff, lower = lwr, upper = upr, 'p_adj' = `p adj`)
+
+kruskal.test(df_disp$distance ~ df_disp$group)
+#p-value = 0.1014
+
+beta_dispagri <- ggplot(df_disp, aes(x = group, y = distance, fill = group, color=group)) +
+geom_boxplot(outlier.shape = NA, alpha=0.5) +
+geom_point(size=2, alpha=0.2)+
+scale_fill_manual(name="Dilution", values=colors_treatment, labels=treatment_names) +
+scale_color_manual(name="Dilution", values=colors_treatment, labels=treatment_names) +
+scale_x_discrete(labels=treatment_names)+ 
+labs(x = "", y = "Distance to centroid") + theme_minimal() + 
+theme( legend.position = "none", panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), panel.grid = element_blank(), axis.line = element_line(colour = "gray95", size=0))   
+  
+
+set.seed(18575748)  
+
+permanova_agri <-adonis2(dist_hellingeragri ~ treatment, data = metadata_dfagri, permutations = 999, by="terms", strata = metadata_dfagri$block)
+
+print(permanova_agri)
+#          Df SumOfSqs      R2      F Pr(>F)    
+#treatment  5    7.206 0.33983 2.3679  0.001 ***
+#Residual  23   13.999 0.66017                  
+#Total     28   21.205 1.00000   
+
+permanovaagri_out <- permanova_agri %>%
+tibble::rownames_to_column(var = "Variable")
+write_xlsx(permanovaagri_out, path = "synthetic_soil/Results/permanova_crop_synthetic_ITS.xlsx")
+```
+
+### PCOA
+```{r}
+# PCoA
+pcoa_res <- cmdscale(dist_hellingeragri, k = 2, eig = TRUE)
+
+pcoa_df <- data.frame(
+SampleID = metadata_dfagri$sample,
+PCoA1 = pcoa_res$points[, 1],
+PCoA2 = pcoa_res$points[, 2],
+treatment = metadata_dfagri$treatment)
+
+# permanova results
+permanova_results <- permanova_agri 
+r2_treatment <- round(permanova_results$R2[1], 3)
+pval_treatment <- signif(permanova_results$`Pr(>F)`[1], 3)
+
+annotation_text <- paste("PERMANOVA results:", paste("Dilution: R² =", r2_treatment, ", p =", pval_treatment), sep = "\n")
+
+colors_treatment <- c(
+"ctl"    = "grey70", 
+"10^-08" = "#FEE6CE",  
+"10^-06" = "#FDAE6B",  
+"10^-04" = "#FD8D3C",  
+"10^-02" = "#E6550D",  
+"10^-0"  = "#A63603" )
+
+agripcoa <- ggplot(pcoa_df, aes(x = PCoA1, y = PCoA2, color = treatment)) + geom_point(size = 4, alpha = 0.8) + 
+stat_ellipse(aes(group = treatment, color = treatment), linetype = 1, size = 0.5, alpha = 0.8) +
+labs(title = "", x = paste0("PCoA1 (", round(pcoa_res$eig[1] / sum(pcoa_res$eig) * 100, 2), "%)"), y = paste0("PCoA2 (", round(pcoa_res$eig[2] / sum(pcoa_res$eig) * 100, 2), "%)")) +
+scale_color_manual(name = "Dilution", values = colors_treatment, labels = treatment_names)+
+theme_classic() +
+theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), panel.grid = element_blank(), plot.title = element_text(color = "black", size = 11), axis.line = element_line(colour = "white"), panel.border = element_rect(colour = "white", fill = NA, size = 0.5), axis.title = element_text(size = 11, color = "black"), legend.title = element_text(color = "black", size = 11), legend.text = element_text(color = "black")) +
+annotate("text", x = -1.25, y = -1, label = annotation_text, hjust = 0, size = 4, color = "black")
+```
+
+# Raup-Crick
+```{r}
+ps_agri <- subset_samples(ps_agri, treatment != "ctl")
+
+# Abundance table
+otu_rc <- as(otu_table(ps_agri), "matrix")
+
+# Sample in line
+if (taxa_are_rows(ps_agri)) {
+otu_rc <- t(otu_rc)}
+
+# Remove sample with no reads
+otu_rc <- otu_rc[rowSums(otu_rc) > 0, , drop = FALSE]
+
+# Raup-Crick
+set.seed(123)
+
+dist_rc_agri <- raupcrick(comm = otu_rc, null = "r1", nsimul = 9999)
+
+summary(as.vector(dist_rc_agri))
+range(as.vector(dist_rc_agri))
+
+#Align metadata
+metadataagri <- data.frame(sample_data(ps_agri))
+metadataagri <- metadataagri[rownames(otu_rc), , drop = FALSE]
+metadataagri$treatment <- factor(metadataagri$treatment)
+metadataagri$block <- factor(metadataagri$block)
+
+# Homogeneity of multivariate dispersions
+betadisper_rc_agri <- betadisper(dist_rc_agri, group = metadataagri$treatment)
+
+plot(betadisper_rc_agri)
+anova_res_rc <- anova(betadisper_rc_agri) #p-value 0.07577
+
+adonis2(dist_rc_agri ~ treatment, data = metadataagri, permutations = 999, by="terms", strata = metadataagri$block)
+#          Df SumOfSqs     R2      F Pr(>F)    
+#treatment  4   3.5918 0.6187 7.7075  0.001 ***
+#Residual  19   2.2135 0.3813                  
+#Total     23   5.8053 1.0000    
+```
+
+#Linear model raup-crick-alpha
+```{r}
+library(vegan)
+library(lmtest)
+
+enzyme_agri_filtre <- div_enzyme %>%
+filter(sample %in% metadataagri$sample) %>%
+slice(match(metadataagri$sample, sample))
+
+pcoa_rc <- cmdscale(dist_rc_agri, k = 5, eig = TRUE, add = TRUE)
+
+# Sample coordinate
+site_scores <- pcoa_rc$points
+# ASV scores
+asv_scores <- wascores(site_scores, otu_rc, expand = TRUE)
+
+# Score table
+asv_scores_df <- as.data.frame(asv_scores) %>% rownames_to_column("ASV")
+
+asv_table <- asv_scores_df %>% left_join(asv_its_mapping, by = "ASV")
+
+top_asv <- bind_rows(
+asv_table %>% slice_max(order_by = abs(V1), n = 10) %>% mutate(Axe = "PCoA1"),
+asv_table %>% slice_max(order_by = abs(V2), n = 10) %>% mutate(Axe = "PCoA2"),
+asv_table %>% slice_max(order_by = abs(V3), n = 10) %>% mutate(Axe = "PCoA3"),
+asv_table %>% slice_max(order_by = abs(V4), n = 10) %>% mutate(Axe = "PCoA4"),
+asv_table %>% slice_max(order_by = abs(V5), n = 10) %>% mutate(Axe = "PCoA5"))
+
+pcoa_rc <- data.frame(
+SampleID = metadataagri$sample,
+PCoA1 = pcoa_rc$points[, 1],
+PCoA2 = pcoa_rc$points[, 2],
+PCoA3 = pcoa_rc$points[, 3],
+PCoA4 = pcoa_rc$points[, 4],
+PCoA5 = pcoa_rc$points[, 5],
+treatment = metadataagri$treatment,
+block = metadataagri$block,
+shannon = enzyme_agri_filtre$Shannon,
+observed = enzyme_agri_filtre$Observed,
+protease = enzyme_agri_filtre$Protease,
+bgluco = enzyme_agri_filtre$Bglucosidase,
+deaminase = enzyme_agri_filtre$Desaminase,
+ammonif = enzyme_agri_filtre$Ammonification,
+nitrif = enzyme_agri_filtre$Nitrification)
+
+X <- as.matrix(pcoa_rc[, grep("PCoA", names(pcoa_rc))])
+protease <- pcoa_rc$protease
+bgluco <- pcoa_rc$bgluco
+des <- pcoa_rc$deaminase
+ammonif <-pcoa_rc$ammonif
+nitrif<-  pcoa_rc$nitrif
+shannon <- pcoa_rc$shannon
+obs <- pcoa_rc$observed
+block <- pcoa_rc$block
+
+#Protease
+prot_lm_b <- lm(sqrt(protease)~ X + obs)
+
+par(mfrow = c(2, 2))
+plot(prot_lm_b)
+
+#Normality of residual
+shapiro.test(residuals(prot_lm_b))
+#p-value = 0.9766
+
+#homoscedasticity
+bptest(prot_lm_b)
+#p-value= 0.03883
+
+summary(prot_lm_b)
+#p-value 0.8166
+
+#b-glucosidase
+bgluco_lm_b <- lm(bgluco~ X + obs)
+
+par(mfrow = c(2, 2))
+plot(bgluco_lm_b)
+
+#Normality of residual
+shapiro.test(residuals(bgluco_lm_b))
+#p-value = 0.6532
+
+#homoscedasticity
+bptest(bgluco_lm_b)
+#p-value= 0.5041
+
+summary(bgluco_lm_b)
+#p-value 0.5178
+
+#Deaminases
+des_lm_b <- lm(des~ X + obs )
+
+par(mfrow = c(2, 2))
+plot(des_lm_b)
+
+#Normality of residual
+shapiro.test(residuals(des_lm_b))
+#p-value = 0.001342
+
+#homoscedasticity
+bptest(des_lm_b)
+#p-value= 0.00977
+
+summary(des_lm_b)
+#p-value 0.07648
+
+#Ammonification
+ammonif_lm_b <- lm(ammonif~ X+ obs)
+
+par(mfrow = c(2, 2))
+plot(ammonif_lm_b)
+
+#Normality of residual
+shapiro.test(residuals(ammonif_lm_b))
+#p-value = 0.6445
+
+#homoscedasticity
+bptest(ammonif_lm_b)
+#p-value= 0.6273
+
+summary(ammonif_lm_b)
+#p-value 0.5059
+
+#Nitrification
+nitrif_lm_b <- lm(sqrt(nitrif)~ X +obs)
+
+par(mfrow = c(2, 2))
+plot(nitrif_lm_b)
+
+#Normality of residual
+shapiro.test(residuals(nitrif_lm_b))
+#p-value = 0.8445
+
+#homoscedasticity
+bptest(nitrif_lm_b)
+#p-value= 0.1496
+summary(nitrif_lm_b)
+#p-value 0.9759
+
+# Models list 
+model_rc <- list(
+protease = prot_lm_b,
+bgluco = bgluco_lm_b,
+des = des_lm_b,
+ammonif = ammonif_lm_b,
+nitrif = nitrif_lm_b)
+
+# Extraire les coefficients
+coef_table <- bind_rows(lapply(names(model_rc), function(name) {tidy(model_rc[[name]]) %>%
+mutate(response = name)})) %>%
+dplyr::select(response, term, estimate, std.error, statistic, p.value)
+
+# Extraire les statistiques globales
+model_stats <- bind_rows(lapply(names(model_rc), function(name) {glance(model_rc[[name]]) %>%
+mutate(response = name)})) %>%
+dplyr::select(response, r.squared, adj.r.squared, statistic, p.value, AIC, BIC)
+
+#Clean
+coef_table <- coef_table %>%
+dplyr::select(response, term, estimate, std.error, statistic, p.value)
+
+model_stats <- model_stats %>%
+dplyr::select(response, r.squared, adj.r.squared, statistic, p.value, AIC, BIC)
+
+write_xlsx(list(
+Coefficients = coef_table,
+Model_Summary = model_stats),
+path = "synthetic_soil/Results/lm_rp_obs_summaries_ITS_crop_synthetic.xlsx")
+```
+
+# Forest soil
+## Alpha diversity
+```{r}
+ps_fo <- subset_samples(ps_tf, soil == "f")
+
+nbrforest <- prune_taxa(taxa_sums(ps_fo) > 0, ps_fo)
+
+ntaxa(nbrforest) #279
+nsamples(ps_fo)  #29
+
+alpha_divfo <- estimate_richness(ps_fo, measures = c("Shannon", "Simpson", "Observed","Chao1"))
+
+# Add metadata
+metadatafo <- as.data.frame(sample_data(ps_fo))
+
+# Merge
+alpha_divfo<- cbind(metadatafo, alpha_divfo)
+
+alpha_divfo %>% filter(treatment == "ctl") %>% summarise(CV = (sd(Shannon, na.rm = TRUE) / mean(Shannon, na.rm = TRUE)) * 100) #101.599
+
+```
+
+### Recap table alpha div
+```{r}
+library(dplyr)
+
+resume_alpha_fo <- alpha_divfo %>%
+group_by(treatment) %>%
+summarise(n = n(),
+Shannon_moy = mean(Shannon, na.rm = TRUE),
+Shannon_sd = sd(Shannon, na.rm = TRUE),
+Simpson_moy = mean(Simpson, na.rm = TRUE),
+Simpson_sd = sd(Simpson, na.rm = TRUE),
+Observed_moy = mean(Observed, na.rm = TRUE),
+Observed_sd = sd(Observed, na.rm = TRUE),
+Chao1_moy = mean(Chao1, na.rm = TRUE),
+Chao1_sd = sd(Chao1, na.rm = TRUE))
+
+resume_alpha_fo
+```
+
+## Kruskal-Wallis alpha diversity
+```{r}
+library(FSA)
+
+indices <- c("Shannon", "Simpson", "Observed", "Chao1")
+variables <- c("block", "treatment")
+
+resultats_kw_fo <- expand_grid(indice = indices, variable = variables) %>%
+rowwise() %>%
+mutate(p_value = kruskal.test(as.formula(paste(indice, "~", variable)), data = alpha_divfo)$p.value) %>%
+ungroup() %>%
+group_by(variable) %>%
+mutate(p_corrigee = p.adjust(p_value, method = "BH")) %>%
+ungroup()
+
+resultats_kw_fo
+
+# Posthoc
+dunnshannonfo<-dunnTest(Shannon ~ treatment, data = alpha_divfo, method = "bh")%>%
+add_significance()
+
+dunnsimpsonfo<-dunnTest(Simpson ~ treatment, data = alpha_divfo, method = "bh")%>%
+add_significance()
+
+dunnobsfo<-dunnTest(Observed ~ treatment, data = alpha_divfo, method = "bh")%>%
+add_significance()
+
+dunnchaofo<-dunnTest(Chao1 ~ treatment, data = alpha_divfo, method = "bh")%>%
+add_significance()
+
+# forest color
+colors_treatmentfo <- c("ctl" = "grey80", "10^-08" = "#EDF8E9", "10^-06" = "#BAE4B3","10^-04" = "#74C476", "10^-02" = "#31A354", "10^-0" = "#006D2C")
+
+lettres_shannon_fo <- data.frame(treatment = c("10^-0", "10^-02", "10^-04", "10^-06", "10^-08", "ctl"),
+lettre = c("a", "a", "ab", "b", "b", "b"),
+y = c(3, 3, 3, 3, 3, 3))
+
+shannonfo <- ggplot(alpha_divfo, aes(x=treatment, y=Shannon, fill=treatment, color=treatment)) +  
+geom_boxplot(outlier.shape = NA, alpha=0.5) + 
+geom_point(size=2, alpha=0.2)+
+scale_fill_manual(name="Dilution", values=colors_treatmentfo, labels=treatment_names) +
+scale_color_manual(name="Dilution", values=colors_treatmentfo, labels=treatment_names) +
+scale_x_discrete(labels=treatment_names) +
+theme_minimal() +
+labs(x="", y="Shannon diversity index") +
+theme( legend.position = "none", panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), panel.grid = element_blank(), axis.line = element_line(colour = "gray95", size=0)) +
+geom_text(data = lettres_shannon_fo, aes(x = treatment, y = y, label = lettre), inherit.aes = FALSE)
+
+
+simpsonfo <- ggplot(alpha_divfo, aes(x=treatment, y=Simpson, fill=treatment, color=treatment)) +  
+geom_boxplot(outlier.shape = NA, alpha=0.5) + 
+geom_point(size=2, alpha=0.2)+
+scale_fill_manual(name="Dilution", values=colors_treatmentfo, labels=treatment_names) +
+scale_color_manual(name="Dilution", values=colors_treatmentfo, labels=treatment_names) +
+scale_x_discrete(labels=treatment_names) +
+theme_minimal() +
+labs(x="", y="Simpson diversity index") +
+theme( legend.position = "none", panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), panel.grid = element_blank(), axis.line = element_line(colour = "gray95", size=0)) 
+
+chaofo <- ggplot(alpha_divfo, aes(x=treatment, y=Chao1, fill=treatment, color=treatment)) +  
+geom_boxplot(outlier.shape = NA, alpha=0.5) + 
+geom_point(size=2, alpha=0.2)+
+scale_fill_manual(name="Dilution", values=colors_treatmentfo, labels=treatment_names) +
+scale_color_manual(name="Dilution", values=colors_treatmentfo, labels=treatment_names) +
+scale_x_discrete(labels=treatment_names) +
+theme_minimal() +
+labs(x="", y="Chao1 index") +
+theme( legend.position = "none", panel.grid.major = element_blank(), panel.grid.minor = element_blank(), 
+panel.background = element_blank(), panel.grid = element_blank(), axis.line = element_line(colour = "gray95", size=0)) 
+
+obsfo <- ggplot(alpha_divfo, aes(x=treatment, y=Observed, fill=treatment, color=treatment)) +  
+geom_boxplot(outlier.shape = NA, alpha=0.5) + 
+geom_point(size=2, alpha=0.2)+
+scale_fill_manual(name="Dilution", values=colors_treatmentfo, labels=treatment_names) +
+scale_color_manual(name="Dilution", values=colors_treatmentfo, labels=treatment_names) +
+scale_x_discrete(labels=treatment_names) +
+theme_minimal() +
+labs(x="", y="Observed") +
+theme( legend.position = "none", panel.grid.major = element_blank(), panel.grid.minor = element_blank(), 
+panel.background = element_blank(), panel.grid = element_blank(), axis.line = element_line(colour = "gray95", size=0)) 
+
+```
+
+## Correlation alpha diversity & enzyme
+```{r}
+enzymefo <- enzyme %>% filter(soil == "forestier")
+
+#Remove CTL because it doesnt make sens to keep it.
+enzyme_fo <- enzymefo %>% filter(treatment != 0)
+
+alpha_divfo <- alpha_divfo %>% filter(treatment != "ctl")
+
+div_enzyme <- alpha_divfo %>% left_join(enzyme_fo, by = "sample")
+
+div_indices <- c("Observed", "Chao1", "Shannon", "Simpson")
+enzymes <- c("Protease", "Desaminase", "Bglucosidase","Ammonification", "Nitrification")
+
+cor_resultsfo <- div_enzyme %>% pivot_longer(cols = all_of(div_indices), names_to = "Diversity_index", values_to = "Diversity_value") %>%
+pivot_longer(cols = all_of(enzymes), names_to = "Enzyme", values_to = "Enzyme_activity") %>%
+group_by(Diversity_index, Enzyme) %>%
+cor_test(Diversity_value, Enzyme_activity, method = "spearman") %>%
+ungroup() %>%
+adjust_pvalue(method = "BH") %>%
+add_significance("p.adj")
+
+write_xlsx(cor_resultsfo, path = "synthetic_soil/Results/correlationalpha_forest_synthetic_its.xlsx")
+
+# Préparer les résultats
+plot_cor_fo <- cor_resultsfo %>%
+mutate(Diversity_index = factor(Diversity_index, levels = c("Observed", "Chao1", "Shannon", "Simpson")), Enzyme = factor(Enzyme, levels = c("Protease", "Desaminase", "Bglucosidase","Ammonification", "Nitrification")), significance = case_when(p.adj < 0.001 ~ "***", p.adj < 0.01  ~ "**", p.adj < 0.05  ~ "*", TRUE ~ ""))
+
+# Heatmap
+corr_alpha_fo <-ggplot(plot_cor_fo, aes(x = Enzyme, y = Diversity_index, fill = cor)) +
+geom_tile(color = "white", linewidth = 0.5) +
+geom_text(aes(label = sprintf("%.3f", p.adj)), size = 3.5)+
+scale_fill_gradient2(low = "#BAE4B3", mid = "white", high = "#006D2C", midpoint = 0, limits = c(-1, 1), name = "Spearman's rho") +
+labs(x = "Fonction measured", y = "Alpha diversity index") +
+theme_minimal() +
+theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1), panel.grid = element_blank())
+```
+
+## Beta diversity
+```{r}
+
+# Abundance table
+otu_fo <- as(otu_table(ps_fo), "matrix")
+
+# In line
+if (taxa_are_rows(ps_fo)) {
+otu_fo <- t(otu_fo)}
+
+# Hellinger
+ps_hellingerfo <- decostand(otu_fo, method = "hellinger")
+
+# Euclidien distance
+dist_hellingerfo <- vegdist(ps_hellingerfo, diag=TRUE, upper=FALSE, method = "euclidean")
+
+# Extract metadata
+metadatafo <- sample_data(ps_fo)
+metadata_dffo <- data.frame(sample_data(ps_fo))
+metadata_dffo$block <-as.factor(metadata_dffo$block)
+metadata_dffo$treatment <-as.factor(metadata_dffo$treatment)
+
+betadisper_resultfo <- betadisper(dist_hellingerfo, group = metadata_dffo$treatment)
+
+plot(betadisper_resultfo)
+anova_resfo <- anova(betadisper_resultfo)  # p-value 0.145
+
+# Extract values
+F_value <- anova_resfo$`F value`[1]
+p_anova <- anova_resfo$`Pr(>F)`[1]
+
+# Dispersion tables
+df_dispfo <- data.frame(sample = names(betadisper_resultfo$distances), distance = betadisper_resultfo$distances, group = metadata_dffo$treatment)
+
+table_dispfo <- df_dispfo %>%
+group_by(group) %>%
+summarise(n = n(), mean_dispersion = mean(distance), sd = sd(distance), se = sd / sqrt(n), .groups = "drop") %>%
+mutate(F_value = F_value, p_anova = p_anova)
+
+# Tukey post-hoc
+tukey_resfo <- TukeyHSD(betadisper_resultfo)
+
+tukey_tablefo <- as.data.frame(tukey_resfo$group)
+tukey_tablefo$comparison <- rownames(tukey_tablefo)
+rownames(tukey_tablefo) <- NULL
+
+tukey_tablefo <- tukey_tablefo %>%
+rename(diff = diff, lower = lwr, upper = upr, 'p_adj' = `p adj`)
+
+write_xlsx(list(
+"Dispersion-agri" = table_disp,
+"Tukey-agri" = tukey_table,
+"Dispersion-fo" = table_dispfo,
+"Tukey-fo" = tukey_tablefo),
+path = here("synthetic_soil/Results/dispersion_synthetic_its.xlsx"))
+
+kruskal.test(df_dispfo$distance ~ df_dispfo$group)
+#p-value = 0.04154
+
+dunndisp_fo<-dunnTest(distance ~ group, data = df_dispfo, method = "bh")%>%
+add_significance()
+
+lettres_dispfo <- data.frame(
+treatment = c("10^-0", "10^-02", "10^-04", "10^-06", "10^-08", "ctl"),
+lettre = c("a", "ab", "ab", "b", "b", "b"),
+y = c(1, 1, 1, 1, 1, 1))
+
+beta_dispfo <- ggplot(df_dispfo, aes(x = group, y = distance, fill = group, color=group)) +
+geom_boxplot(outlier.shape = NA, alpha=0.5) +
+geom_point(size=2, alpha=0.2)+
+scale_fill_manual(name="Dilution", values=colors_treatmentfo, labels=treatment_names) +
+scale_color_manual(name="Dilution", values=colors_treatmentfo, labels=treatment_names) +
+scale_x_discrete(labels=treatment_names)+ 
+labs(x = "", y = "Distance to centroid") + theme_minimal() +
+theme(legend.position = "none", panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), panel.grid = element_blank(), axis.line = element_line(colour = "gray95", size=0))  +
+annotate("text", x = 3.5, y = max(df_dispfo$distance, na.rm = TRUE) * 1.1, label = "Kruskal-Wallis: p = 0.042", size = 4) 
+
+set.seed(18575748)  
+
+permanova_fo <-adonis2(dist_hellingerfo ~ treatment, data = metadata_dffo, permutations = 999, by="terms", strata = metadata_dffo$block)
+
+print(permanova_fo)
+#                Df SumOfSqs      R2     F Pr(>F)    
+#treatment  5   10.779 0.48655 4.359  0.001 ***
+#Residual  23   11.375 0.51345                 
+#Total     28   22.154 1.00000     
+
+permanovafo_out <- permanova_fo %>%
+tibble::rownames_to_column(var = "Variable")
+write_xlsx(permanovafo_out, path = "synthetic_soil/Results/permanova_forest_synthetic_ITS.xlsx")
+```
+
+### PCOA
+```{r}
+pcoa_res <- cmdscale(dist_hellingerfo, k = 2, eig = TRUE)
+
+pcoa_df <- data.frame(
+SampleID = metadata_dffo$sample,
+PCoA1 = pcoa_res$points[, 1],
+PCoA2 = pcoa_res$points[, 2],
+treatment = metadata_dffo$treatment)
+
+# Permanova results
+permanova_results <- permanova_fo  
+r2_treatment <- round(permanova_results$R2[1], 3)
+pval_treatment <- signif(permanova_results$`Pr(>F)`[1], 3)
+
+annotation_text <- paste("PERMANOVA results:", paste("Dilution: R² =", r2_treatment, ", p =", pval_treatment), sep = "\n")
+
+fopcoa <- ggplot(pcoa_df, aes(x = PCoA1, y = PCoA2, color = treatment)) +
+geom_point(size = 4, alpha = 0.8) +  
+stat_ellipse(aes(group = treatment, color = treatment), linetype = 1, size = 0.5, alpha = 0.8) +
+labs(title = "", x = paste0("PCoA1 (", round(pcoa_res$eig[1] / sum(pcoa_res$eig) * 100, 2), "%)"), y = paste0("PCoA2 (", round(pcoa_res$eig[2] / sum(pcoa_res$eig) * 100, 2), "%)")) +
+scale_color_manual(name = "Dilution", values = colors_treatmentfo, labels = treatment_names )+
+theme_classic() +
+theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), panel.grid = element_blank(), plot.title = element_text(color = "black", size = 14),
+axis.line = element_line(colour = "white"), axis.title = element_text(size = 11, color = "black"), 
+legend.title = element_text(color = "black", size = 11), legend.text = element_text(color = "black")) +
+annotate("text", x = -0.75, y = -1.3, label = annotation_text, hjust = 0, size = 4, color = "black")
+```
+
+# Raup-Crick
+```{r}
+ps_fo <- subset_samples(ps_fo, treatment != "ctl")
+
+#Abundance
+otu_rc <- as(otu_table(ps_fo), "matrix")
+
+# Sample in line
+if (taxa_are_rows(ps_fo)) {
+otu_rc <- t(otu_rc)}
+
+#Remove sample with no reads
+otu_rc <- otu_rc[rowSums(otu_rc) > 0, , drop = FALSE]
+
+#Raup-Crick
+set.seed(123)
+dist_rc_fo <- raupcrick(comm = otu_rc, null = "r1", nsimul = 9999)
+
+summary(as.vector(dist_rc_fo))
+range(as.vector(dist_rc_fo))
+
+# Align metadata sample
+metadatafo <- data.frame(sample_data(ps_fo))
+metadatafo <- metadatafo[rownames(otu_rc), , drop = FALSE]
+metadatafo$treatment <- factor(metadatafo$treatment)
+metadatafo$block <- factor(metadatafo$block)
+
+
+# Homogeneity of multivariate dispersions
+betadisper_rc_fo <- betadisper(dist_rc_fo, group = metadatafo$treatment)
+plot(betadisper_rc_fo)
+anova_res_rc <- anova(betadisper_rc_fo) #p-value 0.5837
+
+adonis2(dist_rc_fo ~ treatment, data = metadatafo, permutations = 999, by="terms", strata = metadatafo$block)
+#          Df SumOfSqs      R2      F Pr(>F)    
+#treatment  4   5.9678 0.82641 22.614  0.001 ***
+#Residual  19   1.2535 0.17359                  
+#Total     23   7.2214 1.00000 
+```
+
+#Linear model raup-crick-alpha
+```{r}
+library(vegan)
+
+enzyme_fo_filtre <- div_enzyme %>%
+filter(sample %in% metadatafo$sample) %>%
+slice(match(metadatafo$sample, sample))
+
+pcoa_rc <- cmdscale(dist_rc_fo, k = 5, eig = TRUE, add = TRUE)
+
+# Sample coordinate
+site_scores_fo <- pcoa_rc$points
+# ASVs score
+asv_scores_fo <- wascores(site_scores_fo, otu_rc, expand = TRUE)
+
+# ASV table score
+asv_scores_df_fo <- as.data.frame(asv_scores_fo) %>%
+rownames_to_column("ASV")
+
+asv_table_fo <- asv_scores_df_fo %>%
+left_join(asv_its_mapping, by = "ASV")
+
+top_asv_fo <- bind_rows(
+asv_table_fo %>% slice_max(order_by = abs(V1), n = 10) %>% mutate(Axe = "PCoA1"),
+asv_table_fo %>% slice_max(order_by = abs(V2), n = 10) %>% mutate(Axe = "PCoA2"),
+asv_table_fo %>% slice_max(order_by = abs(V3), n = 10) %>% mutate(Axe = "PCoA3"),
+asv_table_fo %>% slice_max(order_by = abs(V4), n = 10) %>% mutate(Axe = "PCoA4"),
+asv_table_fo %>% slice_max(order_by = abs(V5), n = 10) %>% mutate(Axe = "PCoA5"))
+
+write_xlsx(top_asv_fo, path = "synthetic_soil/Results/topasv_rp_ITS_forest_synthetic.xlsx")
+
+pcoa_rc <- data.frame(
+SampleID = metadatafo$sample,
+PCoA1 = pcoa_rc$points[, 1],
+PCoA2 = pcoa_rc$points[, 2],
+PCoA3 = pcoa_rc$points[, 3],
+PCoA4 = pcoa_rc$points[, 4],
+PCoA5 = pcoa_rc$points[, 5],
+treatment = metadatafo$treatment,
+block = metadatafo$block,
+shannon = enzyme_fo_filtre$Shannon,
+observed = enzyme_fo_filtre$Observed,
+protease = enzyme_fo_filtre$Protease,
+bgluco = enzyme_fo_filtre$Bglucosidase,
+deaminase = enzyme_fo_filtre$Desaminase,
+ammonif = enzyme_fo_filtre$Ammonification,
+nitrif = enzyme_fo_filtre$Nitrification)
+
+X <- as.matrix(pcoa_rc[, grep("PCoA", names(pcoa_rc))])
+protease <- pcoa_rc$protease
+bgluco <- pcoa_rc$bgluco
+des <- pcoa_rc$deaminase
+ammonif <-pcoa_rc$ammonif
+nitrif<-  pcoa_rc$nitrif
+shannon <- pcoa_rc$shannon
+obs <- pcoa_rc$observed
+block <- pcoa_rc$block
+
+#Proteases
+prot_lm_bfo <- lm(sqrt(protease)~ X +obs)
+
+par(mfrow = c(2, 2))
+plot(prot_lm_bfo)
+
+#Normality of residual
+shapiro.test(residuals(prot_lm_bfo))
+#p-value = 0.2727
+
+#homoscedasticity
+bptest(prot_lm_bfo)
+#p-value= 0.7476
+
+summary(prot_lm_bfo)
+#p-value 0.2114
+
+#bglucosidase
+bgluco_lm_bfo <- lm(bgluco~ X + obs)
+
+par(mfrow = c(2, 2))
+plot(bgluco_lm_bfo)
+
+#Normality of residual
+shapiro.test(residuals(bgluco_lm_bfo))
+#p-value = 0.07271
+
+#homoscedasticity
+bptest(bgluco_lm_bfo)
+#p-value= 0.4054
+
+summary(bgluco_lm_bfo)
+#p-value 0.2509
+
+#Deaminases
+des_lm_bfo <- lm(sqrt(des)~ X + obs )
+
+par(mfrow = c(2, 2))
+plot(des_lm_bfo)
+
+#Normality of residual
+shapiro.test(residuals(des_lm_bfo))
+#p-value = 0.006764
+
+#homoscedasticity
+bptest(des_lm_bfo)
+#p-value= 0.05447
+
+summary(des_lm_bfo)
+#p-value 0.1795
+
+#Ammonification
+ammonif_lm_bfo <- lm(ammonif~ X+ obs)
+
+par(mfrow = c(2, 2))
+plot(ammonif_lm_bfo)
+
+#Normality of residual
+shapiro.test(residuals(ammonif_lm_bfo))
+#p-value = 0.08022
+
+#homoscedasticity
+bptest(ammonif_lm_bfo)
+#p-value= 0.7266
+
+summary(ammonif_lm_bfo)
+#p-value 4.932e-05
+#Axe 4
+
+#Nitrification
+nitrif_lm_bfo <- lm(sqrt(nitrif)~ X +obs)
+
+par(mfrow = c(2, 2))
+plot(nitrif_lm_bfo)
+
+#Normality of residual
+shapiro.test(residuals(nitrif_lm_bfo))
+#p-value = 0.3583
+
+#homoscedasticity
+bptest(nitrif_lm_bfo)
+#p-value= 0.5877
+summary(nitrif_lm_bfo)
+#p-value 0.07263
+
+# Models list 
+model_rcfo <- list(
+protease = prot_lm_bfo,
+bgluco = bgluco_lm_bfo,
+des = des_lm_bfo,
+ammonif = ammonif_lm_bfo,
+nitrif = nitrif_lm_bfo)
+
+# Coefficent
+coef_tablefo <- bind_rows(lapply(names(model_rcfo), function(name) {tidy(model_rcfo[[name]]) %>%
+mutate(response = name)})) %>%
+dplyr::select(response, term, estimate, std.error, statistic, p.value)
+
+# Statistics
+model_statsfo <- bind_rows(lapply(names(model_rcfo), function(name) {glance(model_rcfo[[name]]) %>%
+mutate(response = name)})) %>%
+dplyr::select(response, r.squared, adj.r.squared, statistic, p.value, AIC, BIC)
+
+#Clean
+coef_tablefo <- coef_tablefo %>%
+dplyr::select(response, term, estimate, std.error, statistic, p.value)
+
+model_statsfo <- model_statsfo %>%
+dplyr::select(response, r.squared, adj.r.squared, statistic, p.value, AIC, BIC)
+
+write_xlsx(list(
+Coefficients = coef_tablefo,
+Model_Summary = model_statsfo),
+path = "synthetic_soil/Results/lm_rp_obs_summaries_ITS_forest_synthetic.xlsx")
+
+```
+
+## Exploration
+```{r}
+library(tidyverse)
+
+asv_names <- setNames(asv_its_mapping$ASV_number, asv_its_mapping$ASV)
+
+# Replace rowname
+colnames(otu_rc) <- asv_names[colnames(otu_rc)]
+
+enzyme_fo$sample <- gsub("^tf_?", "", enzyme_fo$sample)
+
+
+colors_treatment <- c(
+"10^0"  = "#006D2C",
+"10^-2" = "#31A354",
+"10^-4" = "#74C476",
+"10^-6" = "#BAE4B3", 
+"10^-8" = "#EDF8E9")
+
+treatment_names <- c(
+"10^0"  = "D0",
+"10^-2" = "D2" ,
+"10^-4" = "D4", 
+"10^-6" = "D6", 
+"10^-8" = "D8")
+
+# ASV AMMONIFICATION
+asv_select_ammonif <- c("29", "65", "218", "1338", "18")
+
+asv_long <- otu_rc %>%
+as.data.frame() %>%
+rownames_to_column(var = "sample") %>%
+dplyr::select(sample, all_of(asv_select_ammonif)) %>%
+pivot_longer(cols = -sample, names_to = "ASV", values_to = "Abundance")
+
+enzyme_fo <- enzyme_fo %>% mutate(sample = paste0("tf", sample))
+
+plot_df <- asv_long %>%
+left_join(enzyme_fo %>% dplyr::select(sample,treatment, Ammonification), by = "sample")
+
+plot_df$treatment <- factor(plot_df$treatment, levels = c("10^0", "10^-2", "10^-4", "10^-6", "10^-8"))
+
+#ASV vs ammonification
+corr_ammonif_fo<-ggplot(plot_df, aes(x = Abundance, y = Ammonification,color=treatment)) +
+geom_point(alpha = 0.7) +
+geom_smooth(method = "lm", se = FALSE) +
+scale_color_manual(name="Dilution", values=colors_treatment, labels=treatment_names)+
+facet_wrap(~ASV, scales = "free_x") +
+theme_classic() +
+labs(x = "ASV abundance", y = "Ammonification (mg N/kg/day)", title = " ASV abundance and Ammonification")
+
+ggsave("synthetic_soil/Figures/Fig_S6_ASVits_synt.tiff",plot=corr_ammonif_fo, dpi=600, compression="lzw",   width = 12.07, height = 10.01, units = "in")
+```
+
+# Figure correlation alpha
+```{r}
+corr_alpha_crop_16s <- readRDS("corr_alpha_crop_16s.rds")
+corr_alpha_forest_16s <- readRDS("corr_alpha_forest_16s.rds")
+
+corr_alpha_crop_16s <- corr_alpha_crop_16s + labs(x = NULL, y = NULL)
+corr_alpha_crop <- corr_alpha_crop + labs(x = NULL, y = NULL)
+corr_alpha_forest_16s <- corr_alpha_forest_16s + labs(x = NULL, y = NULL)
+corr_alpha_fo <- corr_alpha_fo + labs(x = NULL, y = NULL)
+
+
+ligne1_crop <- ggarrange(corr_alpha_crop_16s, corr_alpha_crop, ncol = 2, labels = c("A","B"), common.legend = TRUE, legend="left")
+
+ligne2_forest <- ggarrange(corr_alpha_forest_16s, corr_alpha_fo, ncol = 2, labels = c("C","D"), common.legend = TRUE, legend="left")
+
+figure_cor_syn <- ggarrange(ligne1_crop, ligne2_forest, nrow = 2)
+
+ggsave("synthetic_soil/Figures/Fig_S4_correlation_synt.tiff",plot=figure_cor_syn, dpi=600, compression="lzw",   width = 12.07, height = 10.01, units = "in")
+```
+
+# Figure
+```{r}
+library(cowplot)
+
+shannonagri <- shannonagri + theme(legend.position = "none") + guides(color = "none", fill = "none", shape = "none")
+
+shannonfo <- shannonfo + theme(legend.position = "none") + guides(color = "none", fill = "none", shape = "none")
+
+figureitssyn <- ggarrange(
+shannonagri, agripcoa, beta_dispagri, shannonfo, fopcoa, beta_dispfo,
+labels = c("A", "B", "C", "D", "E", "F"), ncol = 3, nrow = 2, widths = c(0.8, 1, 1) ,         common.legend = FALSE, legend = "left")
+
+
+ggsave("synthetic_soil/Figures/Fig_2_ITS_synt.tiff",plot=figureitssyn, dpi=600, compression="lzw", width = 12.07, height = 10.01, units = "in")
+
+```

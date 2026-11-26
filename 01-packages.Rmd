@@ -1,0 +1,36 @@
+---
+title: "01-packages"
+author: "Emmy"
+date: "2025-08-20"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+# Dowloading requiered Packages
+```{r}
+
+# Install pacman 
+if (!require("pacman")) {
+  install.packages("pacman", repos = "https://cloud.r-project.org")
+}
+
+# Install DESeq2 
+if (!require("DESeq2")) {
+  if (!require("BiocManager")) install.packages("BiocManager")
+  BiocManager::install("DESeq2")
+}
+
+# Install phyloseq 
+if (!require("phyloseq")) {
+  if (!require("BiocManager")) install.packages("BiocManager")
+  BiocManager::install("phyloseq")
+}
+
+pacman::p_load(
+  knitr, data.table, ggplot2, dplyr, forcats, here, ggpubr, rstatix, 
+  readxl, writexl, tidyverse, emmeans, ARTool, purrr, rlang, DHARMa, 
+  lme4, car, lattice, effects, lmerTest, broom, glmmTMB, performance, 
+  MASS, broom.mixed, vegan, ggrepel, openxlsx, FSA, cowplot
+)
+
+```

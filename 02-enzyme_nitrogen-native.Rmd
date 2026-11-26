@@ -1,0 +1,538 @@
+---
+title: "02-enzyme_nitrogen-origine"
+author: "Emmy"
+date: "2025-08-20"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+This R script is for NO3, NH4, protease activity, bglucosidase activity and deaminase activity quantification of the native soil
+
+# Nitrate
+## Function 
+```{r}
+no3 <- function(std_file, data_file, intercept = NULL, slope = NULL, label_name = "concentration") {
+  if (is.character(std_file)) {
+    std_data <- read_excel(std_file, col_types = c("numeric","text", "numeric"))
+  } else {
+    std_data <- std_file
+  }
+  
+  if (is.character(data_file)) {
+    no3_data <- read_excel(data_file, col_types = c("text", "text", "numeric"))
+  } else {
+    no3_data <- data_file
+  }
+  
+  # Standard curve
+  ggplot(std_data, aes(x = Standard, y = od540)) +
+    geom_point() +
+    stat_cor(label.y = 1.0, r.accuracy = 0.0001) +
+    stat_regline_equation(label.y = 0.8) +
+    geom_smooth(method = "lm", alpha = 0.15, colour = "darkgrey") +
+    labs(x = "Nitrate concentraion (mg/L)", y = "Absorbance (540 nm)") +
+    theme_bw()
+  
+ #Standard curve  
+  std1 <- std_data %>% dplyr::filter(as.character(plate) == "1")
+  std2 <- std_data %>% dplyr::filter(as.character(plate) == "2")
+  
+  # Models
+  model1 <- lm(od540 ~ Standard, data = std1)
+  model2 <- lm(od540 ~ Standard, data = std2)
+  
+  # Applying model to samples
+  sample1 <- no3_data %>%  dplyr::filter(replicat == "1") %>%
+    mutate(concentration = (od540 - coef(model1)[1]) / coef(model1)[2])
+  
+  sample2 <- no3_data %>%  dplyr::filter(replicat == "2") %>%
+    mutate(concentration = (od540 - coef(model2)[1]) / coef(model2)[2])
+      
+# Blank mean
+mean_blank <- bind_rows(sample1, sample2) %>%
+  filter(sample == "bl") %>%
+  pull(concentration) %>%
+  mean(na.rm = TRUE)
+
+# Sample duplicates means
+mean_conc <- (sample1$concentration + sample2$concentration) / 2
+  # Blank correction
+  if (!is.na(mean_blank) && mean_blank > 0) {
+    mean_conc <- mean_conc - mean_blank
+  } 
+
+  # Assembly
+  result <- sample1[1:length(mean_conc), "sample"]
+  result[[label_name]] <- mean_conc
+  return(result)
+} 
+```
+
+## Native soil nitrate
+```{r}
+
+origine_soilno3 <- no3(
+  std_file = "native_soil/Raw_data/std_no3_pot-8week-2025-02-19.xlsx",
+  data_file = "native_soil/Raw_data/no3_pot-8week-2025-02-19.xlsx",
+  label_name = "concentrationsoil"
+)
+
+```
+
+```{r}
+# NO3 redo
+no3dil <- read_excel("native_soil/Raw_data/nitrate-reprise-dilsample.xlsx", col_types = c("text","numeric","text","numeric"))
+
+# Standards
+stdno3dil <- no3dil[1:24, ]
+
+# Samples 
+sampleno3dil <- no3dil[25:28, ]
+
+# Models
+model1 <- lm(od540 ~ Standard, data = stdno3dil)
+  
+# Apply model to samples
+sample <- sampleno3dil %>% mutate(concentration = (od540 - coef(model1)[1]) / coef(model1)[2])
+  
+# Blank mean
+mean_blank <- sample %>%
+  filter(sample == "bl") %>%
+  pull(concentration) %>%
+  mean(na.rm = TRUE)%>%
+  max(0, .) 
+
+# Samples means
+sample1 <- sample %>% filter(replicat == "1") 
+sample2 <- sample %>% filter(replicat == "2") 
+mean_conc <- (sample1$concentration + sample2$concentration) / 2
+  # Blank correction
+mean_conc <- mean_conc - mean_blank
+
+# Assemblage
+reprise_no3 <- sample1[1:length(mean_conc), "sample"]
+reprise_no3$concentrationsoil <- mean_conc
+
+# Real concentration based on the diluted sample
+reprise_no3$concentrationsoil<-(reprise_no3$concentrationsoil*500)/100
+  
+```
+
+## Replace the sample undiluted by the one diluted
+```{r}
+origine_soilno3 <- origine_soilno3 %>%
+  rows_update(reprise_no3, by = "sample")
+
+```
+
+## Data transformation
+```{r}
+#Creating a dataframe without blank
+origine_soilno3 <- origine_soilno3 %>% filter(sample != "bl") 
+
+# mg/mL to mg/g soil conversion
+# KCl extraction: 1 g of soil in 10 mL of KCl
+no3_origine <- origine_soilno3 %>%
+  mutate(across(starts_with("concentrationsoil"), ~ .x * 0.01, .names = "{.col}_mg_g")) 
+
+no3_origine <- no3_origine[, c("sample", "concentrationsoil_mg_g")]
+
+write_xlsx(no3_origine, path = "native_soil/Results/no3_concentration_native.xlsx")
+```
+
+# Ammonium
+## Function 
+```{r}
+nh4 <- function(std_file, data_file, intercept = NULL, slope = NULL, label_name = "concentration") {
+  if (is.character(std_file)) {
+    std_data <- read_excel(std_file, col_types = c("numeric", "text","numeric"))
+  } else {
+    std_data <- std_file
+  }
+
+  if (is.character(data_file)) {
+    nh4_data <- read_excel(data_file, col_types = c("text", "text", "numeric"))
+  } else {
+    nh4_data <- data_file
+  }
+  
+#  Remove the 20 mg/L from the standard curve
+std_data <- std_data[std_data$Standard != 20, ]
+
+# Standard curve  
+  std1 <- std_data %>% dplyr::filter(as.character(plate) == "1")
+  std2 <- std_data %>% dplyr::filter(as.character(plate) == "2")
+  
+# Models
+  model1 <- lm(od660 ~ Standard, data = std1)
+  model2 <- lm(od660 ~ Standard, data = std2)
+  
+# Apply models to samples
+  sample1 <- nh4_data %>%  dplyr::filter(replicat == "1") %>%
+    mutate(concentration = (od660 - coef(model1)[1]) / coef(model1)[2])
+  
+  sample2 <- nh4_data %>%  dplyr::filter(replicat == "2") %>%
+    mutate(concentration = (od660 - coef(model2)[1]) / coef(model2)[2])
+      
+# Blank mean
+mean_blank <- bind_rows(sample1, sample2) %>%
+  filter(sample == "bl") %>%
+  pull(concentration) %>%
+  mean(na.rm = TRUE)
+
+# Duplicates means
+mean_conc <- (sample1$concentration + sample2$concentration) / 2
+# Blanck correction
+  if (!is.na(mean_blank) && mean_blank > 0) {
+    mean_conc <- mean_conc - mean_blank} 
+
+# Assembly
+  result <- sample1[1:length(mean_conc), "sample"]
+  result[[label_name]] <- mean_conc
+  return(result)}
+
+```
+
+## Native soil Ammonium
+```{r}
+orinh4_soil <- nh4(
+  std_file = "native_soil/Raw_data/std_nh4_pot-8week-2025-02-19.xlsx",
+  data_file = "native_soil/Raw_data/nh4_pot-8week-2025-02-19.xlsx",
+  label_name = "concentrationsoil"
+)
+
+```
+
+```{r}
+# Redo nh4
+nh4dil <- read_excel("native_soil/Raw_data/ammonium-reprise-dilsample.xlsx", col_types = c("text","numeric","text","numeric"))
+
+# Standards
+stdnh4dil <- nh4dil[1:20, ]
+
+# Samples 
+samplenh4dil <- nh4dil[21:38, ]
+
+#  Remove the 20 mg/L from the standard curve
+std_data <- stdnh4dil[stdnh4dil$Standard != 20, ]
+
+# Models
+model1 <- lm(od660 ~ Standard, data = std_data)
+  
+# Apply the model to samples
+sample <- samplenh4dil %>% mutate(concentration = (od660 - coef(model1)[1]) / coef(model1)[2])
+  
+# Blank mean
+mean_blank <- sample %>%
+  filter(sample == "bl") %>%
+  pull(concentration) %>%
+  mean(na.rm = TRUE)%>%
+  max(0, .) 
+
+# Duplicates means
+sample1 <- sample %>% filter(replicat == "1") 
+sample2 <- sample %>% filter(replicat == "2") 
+mean_conc <- (sample1$concentration + sample2$concentration) / 2
+# Blank correction
+mean_conc <- mean_conc - mean_blank
+ 
+# Assembly
+reprise_nh4 <- sample1[1:length(mean_conc), "sample"]
+reprise_nh4$concentrationsoil <- mean_conc
+
+# Real concentration based on the diluted sample
+reprise_nh4$concentrationsoil<-(reprise_nh4$concentrationsoil*500)/100
+  
+```
+
+## Replace the sample undiluted by the one diluted
+```{r}
+orinh4_soil <- orinh4_soil %>%
+  rows_update(reprise_nh4, by = "sample")
+```
+
+## Data transformation
+```{r}
+#Creating a dataframe without blank
+orinh4_soil <- orinh4_soil %>% filter(sample != "bl") 
+
+# mg/mL to mg/g soil conversion
+# KCl extraction: 1 g of soil in 10 mL of KCl
+nh4_origine <- orinh4_soil %>%
+  mutate(across(starts_with("concentrationsoil"), ~ .x * 0.01, .names = "{.col}_mg_g")) 
+
+nh4_origine <- nh4_origine[, c("sample", "concentrationsoil_mg_g")]
+
+write_xlsx(nh4_origine, path = "native_soil/Results/nh4_concentration_native.xlsx")
+```
+
+# Protease activity
+## Function 
+```{r}
+library(dplyr)
+protease <- function(std_file, data_file, label_name, labelenzyme) {
+# Data
+  std_data <- read_excel(std_file, col_types = c("numeric", "text", "numeric", "numeric", "numeric", "numeric","numeric", "numeric"))
+  prot_data <- read_excel(data_file, col_types = c("text","text", "numeric", "numeric","numeric", "numeric", "numeric", "numeric"))
+
+#Standard curve
+std1 <- std_data %>% filter(as.character(type) == "1")
+std2 <- std_data %>% filter(as.character(type) == "2")
+stdcontrol <- std_data %>% filter(as.character(type) == "control")
+  
+# Models
+model1 <- lm(od650 ~ Standards, data = std1)
+model2 <- lm(od650 ~ Standards, data = std2)
+modelcontrol <- lm(od650 ~ Standards, data = stdcontrol)
+
+ 
+# Apply models
+sample1 <- prot_data %>% filter(type == "1") %>%
+mutate(concentration = (od650 - coef(model1)[1]) / coef(model1)[2])
+  
+sample2 <- prot_data %>% filter(type == "2") %>%
+mutate(concentration = (od650 - coef(model2)[1]) / coef(model2)[2])
+  
+control <- prot_data %>% filter(type == "control") %>%
+mutate(concentration = (od650 - coef(modelcontrol)[1]) / coef(modelcontrol)[2]) %>% dplyr::select(Sample, concentration)
+
+  
+# Calculating duplicates means
+mean_conc <- full_join(sample1, sample2, by = "Sample", suffix = c(".1", ".2")) %>%
+  transmute(
+    Sample = Sample,
+    !!label_name := (concentration.1 + concentration.2) / 2)
+
+# Remove CTL
+result <- mean_conc %>%
+  left_join(control, by = "Sample") %>%
+  mutate(
+    !!label_name := .data[[label_name]] - concentration ) %>%
+  dplyr::select(Sample, !!label_name)
+
+
+# Now, we are in mmol/L of tyrosine based on the standard curve
+#conversion in uM/L
+C <- result[[label_name]]*1000
+
+# Calculate enzymatic activity (μmol tyrosine g−1 dry soil h−1)
+## Step 1: (molar concentration * volume color (0.5mL supernatant + 0.75mL NA2CO3 + 0.25 mL Folin = 0.0015L)) 
+C<- (C*0.0015) # =umol
+
+## Step 2: Alliquot correction: umol * (10mL(TCA+TRIS+Caseinate/0.5mL(alliquot for the coloration step)))
+C<- C*(10/0.5)
+
+## Step 3: Normalization with soil masse and incubation time (soil weight= 1 g, time= 2 h)
+enzymact <- C/(1 * 2)  #μmol tyrosine g−1 dry soil h−1
+
+# Creating a dataframe
+result <- result %>%
+  mutate(!!paste0(labelenzyme, "_activity") := enzymact)
+
+
+return(result)}
+```
+
+## Native soil protease
+```{r}
+# First batch
+b1a1b3a6_soilprot <- protease(
+  std_file = "native_soil/Raw_data/std-origine-protease-b1a1-b3a6.xlsx",
+  data_file = "native_soil/Raw_data/protease-origine-b1a1_b3a6.xlsx",
+  label_name = "concentrationsoil",
+  labelenzyme = "soil")
+
+# Second batch
+b3f1b5f6_soilprot <- protease(
+  std_file = "native_soil/Raw_data/std-origine-protease-b3f1-b5f6.xlsx",
+  data_file = "native_soil/Raw_data/protease-origine-b3f1_b5f6.xlsx",
+  label_name = "concentrationsoil",
+  labelenzyme = "soil")
+
+```
+
+## Data transformation
+```{r}
+origineprot <- rbind(b1a1b3a6_soilprot, b3f1b5f6_soilprot)
+origineprot <- origineprot %>% filter(Sample != "bl") 
+origineprot <- origineprot %>% dplyr::select(Sample, soil_activity)
+write_xlsx(origineprot, path = "native_soil/Results/protease_activity_native.xlsx")
+```
+
+# Bglucosidase
+## Function 
+```{r}
+
+bgluco<- function(std_file, data_file, label_name, labelenzyme) {
+
+# Importing data
+std_data <- read_excel(std_file, col_types = c("text", "numeric", "numeric", "numeric", "numeric","numeric"))
+bgluco_data <- read_excel(data_file, col_types = c("text","text", "numeric", "numeric","numeric", "numeric"))
+  
+# Standard curve  
+std_data <- std_data %>%
+  dplyr::filter(conc != 0.5)
+  std1 <- std_data %>% dplyr::filter(as.character(rep) == "1")
+  std2 <- std_data %>% dplyr::filter(as.character(rep) == "2")
+  stdcontrol <- std_data %>% dplyr::filter(as.character(rep) == "bl")
+  
+# Models
+model1 <- lm(od415 ~ conc, data = std1)
+model2 <- lm(od415 ~ conc, data = std2)
+modelcontrol <- lm(od415 ~ conc, data = stdcontrol)
+  
+# Apply models to samples
+sample1 <- bgluco_data %>%  dplyr::filter(rep == "1") %>%
+mutate(concentration = (od415 - coef(model1)[1]) / coef(model1)[2])
+  
+sample2 <- bgluco_data %>%  dplyr::filter(rep == "2") %>%
+mutate(concentration = (od415 - coef(model2)[1]) / coef(model2)[2])
+  
+control <- bgluco_data %>%  dplyr::filter(rep == "bl") %>%
+mutate(concentration = (od415 - coef(modelcontrol)[1]) / coef(modelcontrol)[2])%>%
+dplyr::select(sample, concentration)
+  
+# Duplicates means
+samples_mean <- tibble(
+  sample = sample1$sample,
+  concentration_moyenne = (sample1$concentration + sample2$concentration) / 2)
+
+# Joint CTL on sample columns
+result <- samples_mean %>%
+  left_join(control, by = "sample") %>%
+  mutate(
+    !!label_name := concentration_moyenne - concentration
+  ) %>%
+  dplyr::select(sample, !!label_name)
+
+# Molar concentration
+C <- result[[label_name]] / 139.11  # p-nitrophenol molar mass
+
+#umol
+C <- C*1e6
+
+# Calculate enzymatic activity (μmol p-nitrophenol g−1 dry soil h−1)
+# Formula: (molar concentration * volume) / (soil weight * incubation time)
+enzymact <- (C * 0.00525) / (1 * 1)  # volume = 0.00525L, soil weight= 1 g, time= 1 h
+
+# Creating a dataframe
+result <- result %>%
+  mutate(!!paste0(labelenzyme, "_activity") := enzymact)
+
+
+return(result)}
+
+```
+
+## Native soil bglucosidase
+```{r}
+# First batch
+b1a1b3a6_soilbgluco <- bgluco(
+  std_file = "native_soil/Raw_data/std-origine-b1a1-b3a6.xlsx",
+  data_file = "native_soil/Raw_data/bgluco-origine-b1a1_b3a6.xlsx",
+  label_name = "concentrationsoil",
+  labelenzyme = "soil"
+  )
+
+# Second batch
+b3f1b5f6_soilbgluco <- bgluco(
+  std_file = "native_soil/Raw_data/std-origine-b3f1-b5f6.xlsx",
+  data_file = "native_soil/Raw_data/bgluco-origine-b3f1_b5f6.xlsx",
+  label_name = "concentrationsoil",
+  labelenzyme = "soil")
+```
+
+## Data transformation
+```{r}
+#Creating a dataframe without blank
+originebgluco <- rbind(b1a1b3a6_soilbgluco, b3f1b5f6_soilbgluco)
+originebgluco <- originebgluco %>% dplyr::filter(sample != "bl") 
+
+write_xlsx(originebgluco, path = "native_soil/Results/bglucosidase_activity_native.xlsx")
+```
+
+# Deaminase activity
+# Function 
+```{r}
+desaminase<- function(std_file, data_file, label_name) {
+
+# Importing data
+std_data <- read_excel(std_file, col_types = c("numeric", "numeric", "text"))
+des_data <- read_excel(data_file, col_types = c("text","text", "numeric"))
+  
+# Standard curve  
+std1 <- std_data %>% dplyr::filter(as.character(Plate) == "1")
+std2 <- std_data %>% dplyr::filter(as.character(Plate) == "2")
+std3 <- std_data %>% dplyr::filter(as.character(Plate) == "3")
+  
+# Models
+model1 <- lm(OD405 ~ Standards, data = std1)
+model2 <- lm(OD405 ~ Standards, data = std2)
+model3 <- lm(OD405 ~ Standards, data = std3)
+  
+# Apply model to samples
+samplep1 <- des_data %>% dplyr::filter(plate == "1") %>%
+mutate(concentration = (od405 - coef(model1)[1]) / coef(model1)[2])
+  
+samplep2 <- des_data %>% dplyr::filter(plate == "2") %>%
+mutate(concentration = (od405 - coef(model2)[1]) / coef(model2)[2])
+  
+samplep3 <- des_data %>% dplyr::filter(plate == "3") %>%
+mutate(concentration = (od405 - coef(model3)[1]) / coef(model3)[2]) 
+
+  
+sample_all <- bind_rows(samplep1, samplep2, samplep3)
+  
+sample1 <- sample_all %>% dplyr::filter(plate == "1")
+sample2 <- sample_all %>% dplyr::filter(plate == "2")
+control <- sample_all %>% dplyr::filter(plate == "3")
+  
+# Duplicates means
+samples_mean <- tibble(
+Sample = sample1$Sample,
+concentration_moyenne = (sample1$concentration + sample2$concentration) / 2)
+
+# Joint CTL with sample column
+result <- samples_mean %>%
+left_join(control, by = "Sample") %>%
+mutate(!!label_name := concentration_moyenne - concentration) %>%
+mutate(!!label_name := ifelse(!!sym(label_name) < 0, NA, !!sym(label_name))) %>%
+dplyr::select(Sample, !!label_name)
+
+return(result)}
+
+```
+
+## Native soil deaminase
+```{r}
+# First batch
+b1a1b3a6_soildes <- desaminase(
+  std_file = "native_soil/Raw_data/std-origine-des-b1a1-b3a6.xlsx",
+  data_file = "native_soil/Raw_data/des-origine-b1a1_b3a6.xlsx",
+  label_name = "concentrationsoil")
+
+# Second batch
+b3f1b5f6_soildes <- desaminase(
+  std_file = "native_soil/Raw_data/std-origine-des-b3f1-b5f6.xlsx",
+  data_file = "native_soil/Raw_data/des-origine-b3f1_b5f6.xlsx",
+  label_name = "concentrationsoil")
+```
+
+# Data transformation
+```{r}
+# Creating a dataframe without blank
+originedes <- rbind(b1a1b3a6_soildes, b3f1b5f6_soildes)
+originedes <- originedes %>% dplyr::filter(Sample != "bl") 
+
+# Deaminase activity is express as rate of substrate deaminated per gram of soil.
+originedes$nondilconcsoil <- ((originedes$concentrationsoil)*40.25)/10.25
+initialconc <- 60
+originedes$enzymeactsoil<- initialconc - originedes$nondilconcsoil
+
+# Samples were diluted deux times with methanol (15ml x2). 
+# C1 =? V1=10,25ml C2=concentration determiner V2=40.25ml (15+15+10.25)
+originedes <- originedes %>% dplyr::select(Sample, enzymeactsoil)
+
+write_xlsx(originedes, path = "native_soil/Results/desaminase_activity_native.xlsx")
+
+```

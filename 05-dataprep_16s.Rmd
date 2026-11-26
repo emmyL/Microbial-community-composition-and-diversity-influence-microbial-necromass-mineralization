@@ -1,0 +1,230 @@
+---
+title: "02-16Sdataprep"
+output: html_document
+date: "2026-04-27"
+editor_options: 
+  chunk_output_type: console
+---
+
+This script performs the  data preparation for 16S analysis. 
+
+#Load everything
+```{r}
+results <- read_excel("sample_name_sequencing.xlsx",col_types = c("text","text", "text","text","text","text", "text"))
+
+load("16s_sequencing_result/seqtab.nochim.16s.rdata")
+
+load("16s_sequencing_result/taxamatrix.16s.rdata")
+
+```
+
+# Data preparation
+```{r}
+samdf <- as.data.frame(results)
+rownames(samdf) <- samdf$sample 
+```
+
+## Create a phyloseq object
+```{r}
+
+# Correct sample names in metadata to match seqtab.nochim
+rownames(samdf) <- sub("^blanc\\.", "blanc-", samdf$sample)
+
+# Recreate phyloseq object with corrected sample names
+ps <- phyloseq(
+  otu_table(seqtab.nochim, taxa_are_rows = FALSE),
+  sample_data(samdf),
+  tax_table(taxa))
+
+# Filter out eukaryotes, mitochondria and chloroplasts
+ps <- subset_taxa(ps, (Kingdom == "Bacteria" | Kingdom == "Archaea") &
+    Family != "Mitochondria" & Class != "Chloroplast")
+
+```
+
+sequencing NTC
+```{r}
+# Select blank samples
+ps_blancs <- prune_samples(
+  grepl("^blanc-", sample_names(ps)), ps)
+
+# Check the number of blank samples
+sample_names(ps_blancs)
+
+# Extract ASV abundance table
+tab_blancs <- as(otu_table(ps_blancs), "matrix")
+
+# Put samples in rows and ASVs in columns
+if (taxa_are_rows(ps_blancs)) {
+  tab_blancs <- t(tab_blancs)}
+
+# Remove ASVs with zero abundance across all blanks
+tab_blancs <- tab_blancs[,colSums(tab_blancs) > 0,drop = FALSE]
+
+# Convert abundance table to a data frame
+tableau_blancs <- as.data.frame(t(tab_blancs)) %>% tibble::rownames_to_column("ASV")
+
+# Extract taxonomy
+tax_df <- as.data.frame(as(tax_table(ps_blancs), "matrix")) %>% tibble::rownames_to_column("ASV")
+
+# Combine ASV abundances and taxonomy
+tableau_blancs <- tableau_blancs %>% dplyr::left_join(tax_df, by = "ASV") %>% dplyr::select(-"Kingdom",-"Class", -"Order")
+
+```
+
+```{r}
+library(decontam)
+
+# Find blank
+sample_data(ps)$is.neg <- grepl("^blanc-", sample_names(ps))
+
+# Find potential contaminants 
+resultats_contam <- isContaminant(ps, method = "prevalence",neg = "is.neg")
+
+# Amount of contaminants
+sum(resultats_contam$contaminant, na.rm = TRUE) #23 ASV
+
+asv_conta <- rownames(resultats_contam)[ !is.na(resultats_contam$contaminant) & resultats_contam$contaminant]
+
+tax_contam <- as.data.frame(as(tax_table(ps), "matrix"))
+
+tax_contam <- tax_contam[asv_conta, , drop = FALSE]
+
+abund <- as(otu_table(ps), "matrix")
+
+# In lines
+if (taxa_are_rows(ps)) {
+  abund <- t(abund)}
+
+# Only blank
+est_blanc <- grepl("^blanc-", rownames(abund))
+
+# ASV abundances
+abond_blancs <- colSums(abund[est_blanc, , drop = FALSE])
+abond_sols <- colSums(abund[!est_blanc, , drop = FALSE])
+
+# Recap
+comparaison <- data.frame( ASV = asv_conta, lectures_blancs = abond_blancs[asv_conta], lectures_sols = abond_sols[asv_conta])
+comparaison
+
+# Soil abundance
+abond_sols <- colSums(abund[!est_blanc, , drop = FALSE])
+
+# ASV < 1000 reads
+asv_faible_abondance <- names(abond_sols)[abond_sols < 1000]
+
+length(asv_faible_abondance)
+
+asv_a_retirer <- intersect(asv_conta,asv_faible_abondance)
+
+ps_filtre <- prune_taxa(
+  !taxa_names(ps) %in% asv_a_retirer,
+  ps)
+```
+
+## Removing sequencing NTC
+```{r}
+ps <- subset_samples(ps_filtre, !sample %in% c("blanc.1", "blanc.2", "blanc.3", "blanc.4"))
+
+ntaxa(ps)  # 14428
+nsamples(ps)  #337
+
+```
+
+##Rarefaction
+```{r}
+ps_micro <- prune_samples(grepl("^(ori|t0|t1|t2|tf)", sample_names(ps)), ps)
+
+# Extract abundance matrix
+otu <- as(otu_table(ps_micro), "matrix")
+
+# In line
+if (taxa_are_rows(ps_micro)) {
+  otu <- t(otu)}
+
+# number of reads per sample
+profondeurs <- rowSums(otu)
+
+# Stats
+summary(profondeurs)
+#Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+#24    8018   18696   28581   35717  501781 
+
+nsamples(ps_micro)  # Number of samples 300 (/5 sampling time = 60 ok)
+
+#rarefaction
+otu <- as(otu_table(ps_micro), "matrix")
+
+if (taxa_are_rows(ps_micro)) {
+  otu <- t(otu)}
+
+# Rarefaction curves
+rarecurve(otu, step = 1000, label = FALSE, xlab = "Nombre de lectures", ylab = "Richesse en ASV", col = "grey40", lwd = 1)
+
+otu <- as(otu_table(ps_micro), "matrix")
+
+if (taxa_are_rows(ps_micro)) {
+otu <- t(otu)}
+
+sum(sample_sums(ps_micro) < 1000)
+#22 samples
+sum(sample_sums(ps_micro) < 5000)
+#52 samples
+sum(sample_sums(ps_micro) < 10000)
+#93 samples
+
+profondeur <- 1000
+
+ps_filtre <- prune_samples(
+sample_sums(ps_micro) >= profondeur,
+ps_micro)
+
+ps_filtre <- prune_taxa(
+taxa_sums(ps_filtre) > 0,
+ps_filtre)
+
+nsamples(ps_filtre) #278
+```
+
+#rarefaction like Amplicon tagger
+```{r}
+otu <- as(otu_table(ps_filtre), "matrix")
+
+if (!taxa_are_rows(ps_filtre)) {
+otu <- t(otu)}
+
+set.seed(123)
+n_rarefactions <- 500
+
+otu_somme <- matrix(0, nrow = nrow(otu), ncol = ncol(otu), dimnames = dimnames(otu))
+
+for (i in seq_len(n_rarefactions)) {
+otu_rarefie <- vegan::rrarefy(
+t(otu),
+sample = profondeur)
+
+otu_somme <- otu_somme + t(otu_rarefie)}
+
+otu_moyenne <- otu_somme / n_rarefactions
+
+otu_moyenne <- round(otu_moyenne)
+
+ps_consensus <- phyloseq(
+  otu_table(otu_moyenne, taxa_are_rows = TRUE),
+  tax_table(ps_filtre),
+  sample_data(ps_filtre)
+)
+```
+
+# Creating number for each ASV
+```{r}
+
+asv_16s_mapping <- data.frame(
+ASV = taxa_names(ps_consensus),                                   # ASV
+ASV_number = seq_len(ntaxa(ps_consensus)),                        # ASV number
+Taxa = apply(as(tax_table(ps_consensus), "matrix"), 1, paste, collapse = ";")  )
+
+save(asv_16s_mapping, file = "16s_sequencing_result/asv_16s_mapping.RData")
+
+save(ps_consensus, file = "16s_sequencing_result/phyloseq_filtered_16s.RData")
+```
